@@ -12,28 +12,35 @@ use super::presigning::{self, PresigningResult};
 use super::signing::{self, SigningResult};
 use crate::curve::{RecoverableSignature, Scalar};
 use crate::rounds::{
-    wrap_finalize_error, CorrectnessProofWrapper, FinalizableToNextRound, FinalizableToResult,
-    FinalizeError, FirstRound, InitError, ProtocolResult, ProvableErrorWrapper, Round,
-    RoundWrapper, ToNextRound, ToResult, WrappedRound,
+    wrap_finalize_error, CorrectnessProofWrapper, EvidenceRequiresMessages, FinalizableToNextRound,
+    FinalizableToResult, FinalizeError, FirstRound, InitError, ProtocolResult,
+    ProvableErrorWrapper, Round, RoundWrapper, ToNextRound, ToResult, WrappedRound,
 };
 
 /// Possible results of the merged Presigning and Signing protocols.
 #[derive(Debug)]
 pub struct InteractiveSigningResult<P: SchemeParams, I: Debug>(PhantomData<P>, PhantomData<I>);
 
-impl<P: SchemeParams, I: Debug> ProtocolResult for InteractiveSigningResult<P, I> {
+impl<P: SchemeParams, I: Debug + Clone> ProtocolResult for InteractiveSigningResult<P, I> {
     type Success = RecoverableSignature;
     type ProvableError = InteractiveSigningError<P, I>;
     type CorrectnessProof = InteractiveSigningProof<P, I>;
 }
 
 /// Possible verifiable errors of the merged Presigning and Signing protocols.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum InteractiveSigningError<P: SchemeParams, I: Debug> {
     /// An error in the Presigning part of the protocol.
     Presigning(<PresigningResult<P, I> as ProtocolResult>::ProvableError),
     /// An error in the Signing part of the protocol.
     Signing(<SigningResult<P, I> as ProtocolResult>::ProvableError),
+}
+
+impl<P: SchemeParams, I: Debug> EvidenceRequiresMessages<I> for InteractiveSigningError<P, I> {
+    type Messages = ();
+    fn requires_messages(&self) -> &[(u8, bool)] {
+        unimplemented!()
+    }
 }
 
 /// A proof of a node's correct behavior for the merged Presigning and Signing protocols.
@@ -45,7 +52,7 @@ pub enum InteractiveSigningProof<P: SchemeParams, I: Debug> {
     Signing(<SigningResult<P, I> as ProtocolResult>::CorrectnessProof),
 }
 
-impl<P: SchemeParams, I: Debug> ProvableErrorWrapper<PresigningResult<P, I>>
+impl<P: SchemeParams, I: Debug + Clone> ProvableErrorWrapper<PresigningResult<P, I>>
     for InteractiveSigningResult<P, I>
 {
     fn wrap_error(
@@ -55,7 +62,7 @@ impl<P: SchemeParams, I: Debug> ProvableErrorWrapper<PresigningResult<P, I>>
     }
 }
 
-impl<P: SchemeParams, I: Debug> CorrectnessProofWrapper<PresigningResult<P, I>>
+impl<P: SchemeParams, I: Debug + Clone> CorrectnessProofWrapper<PresigningResult<P, I>>
     for InteractiveSigningResult<P, I>
 {
     fn wrap_proof(
@@ -65,7 +72,7 @@ impl<P: SchemeParams, I: Debug> CorrectnessProofWrapper<PresigningResult<P, I>>
     }
 }
 
-impl<P: SchemeParams, I: Debug> ProvableErrorWrapper<SigningResult<P, I>>
+impl<P: SchemeParams, I: Debug + Clone> ProvableErrorWrapper<SigningResult<P, I>>
     for InteractiveSigningResult<P, I>
 {
     fn wrap_error(
@@ -75,7 +82,7 @@ impl<P: SchemeParams, I: Debug> ProvableErrorWrapper<SigningResult<P, I>>
     }
 }
 
-impl<P: SchemeParams, I: Debug> CorrectnessProofWrapper<SigningResult<P, I>>
+impl<P: SchemeParams, I: Debug + Clone> CorrectnessProofWrapper<SigningResult<P, I>>
     for InteractiveSigningResult<P, I>
 {
     fn wrap_proof(

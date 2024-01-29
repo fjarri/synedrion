@@ -12,40 +12,47 @@ use super::super::{AuxInfo, KeyShare, SchemeParams};
 use super::key_init::{self, KeyInitResult};
 use super::key_refresh::{self, KeyRefreshResult};
 use crate::rounds::{
-    no_direct_messages, wrap_finalize_error, CorrectnessProofWrapper, FinalizableToNextRound,
-    FinalizableToResult, FinalizeError, FirstRound, InitError, ProtocolResult, Round, ToNextRound,
-    ToResult,
+    no_direct_messages, wrap_finalize_error, CorrectnessProofWrapper, EvidenceRequiresMessages,
+    FinalizableToNextRound, FinalizableToResult, FinalizeError, FirstRound, InitError,
+    ProtocolResult, Round, ToNextRound, ToResult,
 };
 
 /// Possible results of the merged KeyGen and KeyRefresh protocols.
 #[derive(Debug)]
 pub struct KeyGenResult<P: SchemeParams, I>(PhantomData<P>, PhantomData<I>);
 
-impl<P: SchemeParams, I: Debug + Ord> ProtocolResult for KeyGenResult<P, I> {
+impl<P: SchemeParams, I: Debug + Clone + Ord> ProtocolResult for KeyGenResult<P, I> {
     type Success = (KeyShare<P, I>, AuxInfo<P, I>);
     type ProvableError = KeyGenError<P, I>;
     type CorrectnessProof = KeyGenProof<P, I>;
 }
 
 /// Possible verifiable errors of the merged KeyGen and KeyRefresh protocols.
-#[derive(Debug)]
-pub enum KeyGenError<P: SchemeParams, I: Debug + Ord> {
+#[derive(Debug, Clone)]
+pub enum KeyGenError<P: SchemeParams, I: Debug + Clone + Ord> {
     /// An error in the KeyGen part of the protocol.
     KeyInit(<KeyInitResult<P, I> as ProtocolResult>::ProvableError),
     /// An error in the KeyRefresh part of the protocol.
     KeyRefresh(<KeyRefreshResult<P, I> as ProtocolResult>::ProvableError),
 }
 
+impl<P: SchemeParams, I: Debug + Clone + Ord> EvidenceRequiresMessages<I> for KeyGenError<P, I> {
+    type Messages = ();
+    fn requires_messages(&self) -> &[(u8, bool)] {
+        unimplemented!()
+    }
+}
+
 /// A proof of a node's correct behavior for the merged KeyGen and KeyRefresh protocols.
 #[derive(Debug)]
-pub enum KeyGenProof<P: SchemeParams, I: Debug + Ord> {
+pub enum KeyGenProof<P: SchemeParams, I: Debug + Clone + Ord> {
     /// A proof for the KeyGen part of the protocol.
     KeyInit(<KeyInitResult<P, I> as ProtocolResult>::CorrectnessProof),
     /// A proof for the KeyRefresh part of the protocol.
     KeyRefresh(<KeyRefreshResult<P, I> as ProtocolResult>::CorrectnessProof),
 }
 
-impl<P: SchemeParams, I: Debug + Ord> CorrectnessProofWrapper<KeyInitResult<P, I>>
+impl<P: SchemeParams, I: Debug + Clone + Ord> CorrectnessProofWrapper<KeyInitResult<P, I>>
     for KeyGenResult<P, I>
 {
     fn wrap_proof(
@@ -55,7 +62,7 @@ impl<P: SchemeParams, I: Debug + Ord> CorrectnessProofWrapper<KeyInitResult<P, I
     }
 }
 
-impl<P: SchemeParams, I: Debug + Ord> CorrectnessProofWrapper<KeyRefreshResult<P, I>>
+impl<P: SchemeParams, I: Debug + Clone + Ord> CorrectnessProofWrapper<KeyRefreshResult<P, I>>
     for KeyGenResult<P, I>
 {
     fn wrap_proof(

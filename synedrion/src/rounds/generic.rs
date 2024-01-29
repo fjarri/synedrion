@@ -99,7 +99,7 @@ pub trait ProtocolResult: Debug {
     type Success;
     /// A collection of data which, in combination with the messages received,
     /// can be used to prove malicious behavior of a remote node.
-    type ProvableError: Debug;
+    type ProvableError: Debug + Clone;
     /// A collection of data which, in combination with the messages received,
     /// can be used to prove correct behavior of this node.
     ///
@@ -200,3 +200,28 @@ macro_rules! no_direct_messages {
 }
 
 pub(crate) use no_direct_messages;
+
+use crate::sessions::Message;
+
+// TODO: rename this
+pub trait EvidenceRequiresMessages<I> {
+    type Messages;
+    fn requires_messages(&self) -> &[(u8, bool)];
+
+    fn verify_malicious(
+        &self,
+        _shared_randomness: &[u8],
+        _other_ids: &BTreeSet<I>,
+        _my_id: &I,
+        _messages: &BTreeMap<(u8, bool), Message>,
+    ) -> bool {
+        unimplemented!()
+    }
+}
+
+impl<I> EvidenceRequiresMessages<I> for () {
+    type Messages = ();
+    fn requires_messages(&self) -> &[(u8, bool)] {
+        &[]
+    }
+}

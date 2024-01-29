@@ -22,8 +22,9 @@ use crate::paillier::{
     RPParamsMod, RPSecret, Randomizer, SecretKeyPaillier, SecretKeyPaillierPrecomputed,
 };
 use crate::rounds::{
-    no_broadcast_messages, no_direct_messages, FinalizableToNextRound, FinalizableToResult,
-    FinalizeError, FirstRound, InitError, ProtocolResult, Round, ToNextRound, ToResult,
+    no_broadcast_messages, no_direct_messages, EvidenceRequiresMessages, FinalizableToNextRound,
+    FinalizableToResult, FinalizeError, FirstRound, InitError, ProtocolResult, Round, ToNextRound,
+    ToResult,
 };
 use crate::tools::bitvec::BitVec;
 use crate::tools::hashing::{Chain, FofHasher, HashOutput};
@@ -39,10 +40,10 @@ impl<P: SchemeParams, I: Debug + Ord> ProtocolResult for KeyRefreshResult<P, I> 
     type CorrectnessProof = ();
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct KeyRefreshError<P: SchemeParams>(KeyRefreshErrorEnum<P>);
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum KeyRefreshErrorEnum<P: SchemeParams> {
     // TODO (#43): this can be removed when error verification is added
     #[allow(dead_code)]
@@ -57,6 +58,13 @@ enum KeyRefreshErrorEnum<P: SchemeParams> {
         x: Scalar,
         mu: Randomizer<P::Paillier>,
     },
+}
+
+impl<P: SchemeParams, I> EvidenceRequiresMessages<I> for KeyRefreshError<P> {
+    type Messages = ();
+    fn requires_messages(&self) -> &[(u8, bool)] {
+        unimplemented!()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

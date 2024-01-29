@@ -16,7 +16,7 @@ pub(crate) struct EchoRound<I, Sig> {
 }
 
 #[derive(Serialize, Deserialize)]
-struct Message<I, Sig> {
+struct EchoMessage<I, Sig> {
     broadcasts: Vec<(I, SignedMessage<Sig>)>,
 }
 
@@ -56,7 +56,7 @@ where
     }
 
     pub fn make_broadcast(&self) -> Box<[u8]> {
-        let message = Message {
+        let message = EchoMessage {
             broadcasts: self.broadcasts.clone().into_iter().collect(),
         };
         serialize_message(&message).unwrap()
@@ -64,7 +64,7 @@ where
 
     pub fn verify_broadcast(&self, from: &I, payload: &[u8]) -> Result<(), EchoError> {
         // TODO (#68): check that the direct payload is empty?
-        let message: Message<I, Sig> = deserialize_message(payload)
+        let message: EchoMessage<I, Sig> = deserialize_message(payload)
             .map_err(|err| EchoError::CannotDeserialize(err.to_string()))?;
 
         // TODO (#68): check that there are no repeating indices, and the indices are in range.

@@ -6,6 +6,7 @@ use rand_core::CryptoRngCore;
 use serde::{Deserialize, Serialize};
 use signature::hazmat::{PrehashVerifier, RandomizedPrehashSigner};
 
+use super::type_erased::deserialize_message;
 use super::error::LocalError;
 use crate::tools::hashing::{Chain, FofHasher, HashOutput};
 use crate::tools::serde_bytes;
@@ -130,6 +131,10 @@ impl<Sig> VerifiedMessage<Sig> {
     pub fn payload(&self) -> &[u8] {
         &self.message.payload
     }
+
+    pub fn to_message(self) -> Message {
+        self.message
+    }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
@@ -142,6 +147,15 @@ pub(crate) struct Message {
 }
 
 impl Message {
+    pub(crate) fn deserialize<T: for<'de> Deserialize<'de>>(&self) -> Result<T, String> {
+        deserialize_message(&self.payload)
+    }
+
+    pub(crate) fn deserialize_echo<T: for<'de> Deserialize<'de>>(&self) -> Result<T, String> {
+        let echo_message = deserialize_message::<EchoMessage>(&self.payload)?;
+
+    }
+
     fn hash(&self) -> HashOutput {
         FofHasher::new_with_dst(b"Message")
             .chain(&self.session_id)

@@ -18,8 +18,8 @@ use super::super::{
 use crate::curve::{Point, Scalar};
 use crate::paillier::{Ciphertext, CiphertextMod, PaillierParams, Randomizer, RandomizerMod};
 use crate::rounds::{
-    no_broadcast_messages, FinalizableToNextRound, FinalizableToResult, FinalizeError, FirstRound,
-    InitError, ProtocolResult, Round, ToNextRound, ToResult,
+    no_broadcast_messages, EvidenceRequiresMessages, FinalizableToNextRound, FinalizableToResult,
+    FinalizeError, FirstRound, InitError, ProtocolResult, Round, ToNextRound, ToResult,
 };
 use crate::tools::hashing::{Chain, FofHasher, HashOutput};
 use crate::uint::Signed;
@@ -43,6 +43,13 @@ pub enum PresigningError {
     Round2(String),
     /// An error in Round 3.
     Round3(String),
+}
+
+impl<I> EvidenceRequiresMessages<I> for PresigningError {
+    type Messages = ();
+    fn requires_messages(&self) -> &[(u8, bool)] {
+        unimplemented!()
+    }
 }
 
 struct Context<P: SchemeParams, I: Ord> {
