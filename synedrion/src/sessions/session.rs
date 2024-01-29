@@ -98,10 +98,10 @@ fn route_message_echo<Res: ProtocolResult, Sig>(
     Err(RemoteErrorEnum::OutOfOrderMessage)
 }
 
-fn wrap_receive_result<Res: ProtocolResult, Verifier: Clone, T>(
+fn wrap_receive_result<Res: ProtocolResult, Verifier: Clone, T, Sig>(
     from: &Verifier,
     result: Result<T, ReceiveError<Res>>,
-) -> Result<T, Error<Res, Verifier>> {
+) -> Result<T, Error<Res, Verifier, Sig>> {
     // TODO (#43): we need to attach all the necessary messages here,
     // to make sure that every provable error can be independently verified
     // given the party's verifying key.
@@ -385,7 +385,7 @@ where
         &self,
         from: &Verifier,
         message: &CheckedCombinedMessage<Sig>,
-    ) -> Result<MessageFor, Error<Res, Verifier>> {
+    ) -> Result<MessageFor, Error<Res, Verifier, Sig>> {
         let message_for = match &self.tp {
             SessionType::Normal { this_round, .. } => {
                 route_message_normal(this_round.as_ref(), message)
@@ -409,7 +409,7 @@ where
         accum: &mut RoundAccumulator<Sig>,
         from: &Verifier,
         message: CombinedMessage<Sig>,
-    ) -> Result<Option<PreprocessedMessage<Sig>>, Error<Res, Verifier>> {
+    ) -> Result<Option<PreprocessedMessage<Sig>>, Error<Res, Verifier, Sig>> {
         let checked = message.check().map_err(|msg| {
             Error::Remote(RemoteError {
                 party: from.clone(),
@@ -480,7 +480,7 @@ where
     pub fn process_message(
         &self,
         preprocessed: PreprocessedMessage<Sig>,
-    ) -> Result<ProcessedMessage<Sig, Verifier>, Error<Res, Verifier>> {
+    ) -> Result<ProcessedMessage<Sig, Verifier>, Error<Res, Verifier, Sig>> {
         let from_idx = preprocessed.from_idx;
         let from = self.context.verifiers[preprocessed.from_idx.as_usize()].clone();
         let message = preprocessed.message;
@@ -519,7 +519,7 @@ where
         self,
         rng: &mut impl CryptoRngCore,
         accum: RoundAccumulator<Sig>,
-    ) -> Result<FinalizeOutcome<Res, Sig, Signer, Verifier>, Error<Res, Verifier>> {
+    ) -> Result<FinalizeOutcome<Res, Sig, Signer, Verifier>, Error<Res, Verifier, Sig>> {
         match self.tp {
             SessionType::Normal { this_round, .. } => {
                 Self::finalize_regular_round(self.context, this_round, rng, accum)
@@ -535,7 +535,7 @@ where
         round: Box<dyn DynFinalizable<Res>>,
         rng: &mut impl CryptoRngCore,
         accum: RoundAccumulator<Sig>,
-    ) -> Result<FinalizeOutcome<Res, Sig, Signer, Verifier>, Error<Res, Verifier>> {
+    ) -> Result<FinalizeOutcome<Res, Sig, Signer, Verifier>, Error<Res, Verifier, Sig>> {
         let requires_echo = round.requires_echo();
 
         let outcome = round
@@ -593,7 +593,7 @@ where
         round: Box<dyn DynFinalizable<Res>>,
         rng: &mut impl CryptoRngCore,
         accum: RoundAccumulator<Sig>,
-    ) -> Result<FinalizeOutcome<Res, Sig, Signer, Verifier>, Error<Res, Verifier>> {
+    ) -> Result<FinalizeOutcome<Res, Sig, Signer, Verifier>, Error<Res, Verifier, Sig>> {
         let echo_accum = accum.echo_accum.ok_or(Error::Local(LocalError(
             "The accumulator is in the invalid state for the echo round".into(),
         )))?;

@@ -15,8 +15,8 @@ use serde::{Deserialize, Serialize};
 use crate::cggmp21::SchemeParams;
 use crate::curve::{Point, Scalar};
 use crate::rounds::{
-    FinalizableToResult, FinalizationRequirement, FinalizeError, FirstRound, InitError, PartyIdx,
-    ProtocolResult, Round, ToResult,
+    EvidenceRequiresMessages, FinalizableToResult, FinalizationRequirement, FinalizeError,
+    FirstRound, InitError, PartyIdx, ProtocolResult, Round, ToResult,
 };
 use crate::threshold::ThresholdKeyShareSeed;
 use crate::tools::{
@@ -40,6 +40,13 @@ impl<P: SchemeParams> ProtocolResult for KeyResharingResult<P> {
 pub enum KeyResharingError {
     UnexpectedSender,
     SubshareMismatch,
+}
+
+impl EvidenceRequiresMessages for KeyResharingError {
+    type Messages = ();
+    fn requires_messages(&self) -> Vec<(u8, bool)> {
+        unimplemented!()
+    }
 }
 
 pub struct OldHolder<P: SchemeParams> {

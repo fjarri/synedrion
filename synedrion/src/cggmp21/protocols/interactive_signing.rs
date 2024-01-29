@@ -1,5 +1,6 @@
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
+use alloc::vec::Vec;
 use core::marker::PhantomData;
 
 use rand_core::CryptoRngCore;
@@ -10,9 +11,9 @@ use crate::cggmp21::params::SchemeParams;
 use crate::common::KeyShare;
 use crate::curve::{RecoverableSignature, Scalar};
 use crate::rounds::{
-    wrap_finalize_error, CorrectnessProofWrapper, FinalizableToNextRound, FinalizableToResult,
-    FinalizeError, FirstRound, InitError, PartyIdx, ProtocolResult, ProvableErrorWrapper, Round,
-    RoundWrapper, ToNextRound, ToResult,
+    wrap_finalize_error, CorrectnessProofWrapper, EvidenceRequiresMessages, FinalizableToNextRound,
+    FinalizableToResult, FinalizeError, FirstRound, InitError, PartyIdx, ProtocolResult,
+    ProvableErrorWrapper, Round, RoundWrapper, ToNextRound, ToResult,
 };
 
 /// Possible results of the merged Presigning and Signing protocols.
@@ -32,6 +33,13 @@ pub enum InteractiveSigningError<P: SchemeParams> {
     Presigning(<PresigningResult<P> as ProtocolResult>::ProvableError),
     /// An error in the Signing part of the protocol.
     Signing(<SigningResult<P> as ProtocolResult>::ProvableError),
+}
+
+impl<P: SchemeParams> EvidenceRequiresMessages for InteractiveSigningError<P> {
+    type Messages = ();
+    fn requires_messages(&self) -> Vec<(u8, bool)> {
+        unimplemented!()
+    }
 }
 
 /// A proof of a node's correct behavior for the merged Presigning and Signing protocols.

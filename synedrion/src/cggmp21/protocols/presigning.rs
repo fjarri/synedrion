@@ -16,9 +16,9 @@ use crate::common::{KeyShare, KeySharePrecomputed, PresigningData};
 use crate::curve::{Point, Scalar};
 use crate::paillier::{Ciphertext, CiphertextMod, PaillierParams, Randomizer, RandomizerMod};
 use crate::rounds::{
-    all_parties_except, no_broadcast_messages, try_to_holevec, FinalizableToNextRound,
-    FinalizableToResult, FinalizeError, FirstRound, InitError, PartyIdx, ProtocolResult, Round,
-    ToNextRound, ToResult,
+    all_parties_except, no_broadcast_messages, try_to_holevec, EvidenceRequiresMessages,
+    FinalizableToNextRound, FinalizableToResult, FinalizeError, FirstRound, InitError, PartyIdx,
+    ProtocolResult, Round, ToNextRound, ToResult,
 };
 use crate::tools::{
     collections::{HoleRange, HoleVec},
@@ -45,6 +45,13 @@ pub enum PresigningError {
     Round2(String),
     /// An error in Round 3.
     Round3(String),
+}
+
+impl EvidenceRequiresMessages for PresigningError {
+    type Messages = ();
+    fn requires_messages(&self) -> Vec<(u8, bool)> {
+        unimplemented!()
+    }
 }
 
 struct Context<P: SchemeParams> {

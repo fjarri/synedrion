@@ -12,9 +12,9 @@ use super::key_refresh::{self, KeyRefreshResult};
 use crate::cggmp21::SchemeParams;
 use crate::common::KeyShare;
 use crate::rounds::{
-    no_direct_messages, wrap_finalize_error, CorrectnessProofWrapper, FinalizableToNextRound,
-    FinalizableToResult, FinalizeError, FirstRound, InitError, PartyIdx, ProtocolResult, Round,
-    ToNextRound, ToResult,
+    no_direct_messages, wrap_finalize_error, CorrectnessProofWrapper, EvidenceRequiresMessages,
+    FinalizableToNextRound, FinalizableToResult, FinalizeError, FirstRound, InitError, PartyIdx,
+    ProtocolResult, Round, ToNextRound, ToResult,
 };
 
 /// Possible results of the merged KeyGen and KeyRefresh protocols.
@@ -31,23 +31,30 @@ impl<P: SchemeParams> ProtocolResult for KeyGenResult<P> {
 #[derive(Debug, Clone)]
 pub enum KeyGenError<P: SchemeParams> {
     /// An error in the KeyGen part of the protocol.
-    KeyInit(<KeyInitResult as ProtocolResult>::ProvableError),
+    KeyInit(<KeyInitResult<P> as ProtocolResult>::ProvableError),
     /// An error in the KeyRefresh part of the protocol.
     KeyRefresh(<KeyRefreshResult<P> as ProtocolResult>::ProvableError),
+}
+
+impl<P: SchemeParams> EvidenceRequiresMessages for KeyGenError<P> {
+    type Messages = ();
+    fn requires_messages(&self) -> Vec<(u8, bool)> {
+        unimplemented!()
+    }
 }
 
 /// A proof of a node's correct behavior for the merged KeyGen and KeyRefresh protocols.
 #[derive(Debug, Clone)]
 pub enum KeyGenProof<P: SchemeParams> {
     /// A proof for the KeyGen part of the protocol.
-    KeyInit(<KeyInitResult as ProtocolResult>::CorrectnessProof),
+    KeyInit(<KeyInitResult<P> as ProtocolResult>::CorrectnessProof),
     /// A proof for the KeyRefresh part of the protocol.
     KeyRefresh(<KeyRefreshResult<P> as ProtocolResult>::CorrectnessProof),
 }
 
-impl<P: SchemeParams> CorrectnessProofWrapper<KeyInitResult> for KeyGenResult<P> {
+impl<P: SchemeParams> CorrectnessProofWrapper<KeyInitResult<P>> for KeyGenResult<P> {
     fn wrap_proof(
-        proof: <KeyInitResult as ProtocolResult>::CorrectnessProof,
+        proof: <KeyInitResult<P> as ProtocolResult>::CorrectnessProof,
     ) -> Self::CorrectnessProof {
         KeyGenProof::KeyInit(proof)
     }

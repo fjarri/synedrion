@@ -9,6 +9,7 @@ use core::marker::PhantomData;
 use rand_core::CryptoRngCore;
 use serde::{Deserialize, Serialize};
 
+use super::key_init_errors::{KeyInitError, KeyInitErrorType};
 use crate::cggmp21::{
     sigma::{SchCommitment, SchProof, SchSecret},
     SchemeParams,
@@ -26,28 +27,19 @@ use crate::tools::hashing::{Chain, Hash, HashOutput, Hashable};
 
 /// Possible results of the KeyGen protocol.
 #[derive(Debug, Clone, Copy)]
-pub struct KeyInitResult;
+pub struct KeyInitResult<P: SchemeParams>(PhantomData<P>);
 
-impl ProtocolResult for KeyInitResult {
+impl<P: SchemeParams> ProtocolResult for KeyInitResult<P> {
     type Success = KeyShareSeed;
-    type ProvableError = KeyInitError;
+    type ProvableError = KeyInitError<P>;
     type CorrectnessProof = ();
 }
 
-/// Possible verifiable errors of the KeyGen protocol.
-#[derive(Debug, Clone, Copy)]
-pub enum KeyInitError {
-    /// A hash mismatch in Round 2.
-    R2HashMismatch,
-    /// Failed to verify `П^{sch}` in Round 3.
-    R3InvalidSchProof,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct PublicData<P: SchemeParams> {
-    cap_x: Point,
-    cap_a: SchCommitment,
-    rid: BitVec,
+pub(super) struct PublicData<P: SchemeParams> {
+    pub(super) cap_x: Point,
+    pub(super) cap_a: SchCommitment,
+    pub(super) rid: BitVec,
     u: BitVec,
     phantom: PhantomData<P>,
 }
@@ -63,7 +55,7 @@ impl<P: SchemeParams> Hashable for PublicData<P> {
 }
 
 impl<P: SchemeParams> PublicData<P> {
-    fn hash(&self, sid_hash: &HashOutput, party_idx: PartyIdx) -> HashOutput {
+    pub(super) fn hash(&self, sid_hash: &HashOutput, party_idx: PartyIdx) -> HashOutput {
         Hash::new_with_dst(b"KeyInit")
             .chain(sid_hash)
             .chain(&party_idx)
@@ -134,7 +126,7 @@ impl<P: SchemeParams> FirstRound for Round1<P> {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Round1Message {
-    cap_v: HashOutput,
+    pub(super) cap_v: HashOutput,
 }
 
 pub struct Round1Payload {
@@ -143,7 +135,7 @@ pub struct Round1Payload {
 
 impl<P: SchemeParams> Round for Round1<P> {
     type Type = ToNextRound;
-    type Result = KeyInitResult;
+    type Result = KeyInitResult<P>;
     const ROUND_NUM: u8 = 1;
     const NEXT_ROUND_NUM: Option<u8> = Some(2);
 
@@ -218,7 +210,7 @@ pub struct Round2<P: SchemeParams> {
 #[serde(bound(serialize = "PublicData<P>: Serialize"))]
 #[serde(bound(deserialize = "PublicData<P>: for<'x> Deserialize<'x>"))]
 pub struct Round2Message<P: SchemeParams> {
-    data: PublicData<P>,
+    pub(super) data: PublicData<P>,
 }
 
 pub struct Round2Payload<P: SchemeParams> {
@@ -227,7 +219,7 @@ pub struct Round2Payload<P: SchemeParams> {
 
 impl<P: SchemeParams> Round for Round2<P> {
     type Type = ToNextRound;
-    type Result = KeyInitResult;
+    type Result = KeyInitResult<P>;
     const ROUND_NUM: u8 = 2;
     const NEXT_ROUND_NUM: Option<u8> = Some(3);
 
@@ -268,7 +260,10 @@ impl<P: SchemeParams> Round for Round2<P> {
         if &broadcast_msg.data.hash(&self.context.sid_hash, from)
             != self.others_cap_v.get(from.as_usize()).unwrap()
         {
-            return Err(KeyInitError::R2HashMismatch);
+            return Err(KeyInitError {
+                error: KeyInitErrorType::R2HashMismatch,
+                phantom: PhantomData,
+            });
         }
 
         Ok(Round2Payload {
@@ -312,12 +307,12 @@ pub struct Round3<P: SchemeParams> {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Round3Message {
-    psi: SchProof,
+    pub(super) psi: SchProof,
 }
 
 impl<P: SchemeParams> Round for Round3<P> {
     type Type = ToResult;
-    type Result = KeyInitResult;
+    type Result = KeyInitResult<P>;
     const ROUND_NUM: u8 = 3;
     const NEXT_ROUND_NUM: Option<u8> = None;
 
@@ -365,7 +360,10 @@ impl<P: SchemeParams> Round for Round3<P> {
 
         let aux = (&self.context.sid_hash, &from, &self.rid);
         if !broadcast_msg.psi.verify(&data.cap_a, &data.cap_x, &aux) {
-            return Err(KeyInitError::R3InvalidSchProof);
+            return Err(KeyInitError {
+                error: KeyInitErrorType::R3InvalidSchProof,
+                phantom: PhantomData,
+            });
         }
         Ok(())
     }

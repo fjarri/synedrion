@@ -3,6 +3,7 @@
 mod combined_message;
 mod echo;
 mod error;
+mod evidence;
 mod session;
 mod signed_message;
 mod type_erased;

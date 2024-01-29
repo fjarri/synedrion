@@ -23,8 +23,8 @@ use crate::paillier::{
 };
 use crate::rounds::{
     all_parties_except, no_broadcast_messages, no_direct_messages, try_to_holevec,
-    FinalizableToNextRound, FinalizableToResult, FinalizeError, FirstRound, InitError, PartyIdx,
-    ProtocolResult, Round, ToNextRound, ToResult,
+    EvidenceRequiresMessages, FinalizableToNextRound, FinalizableToResult, FinalizeError,
+    FirstRound, InitError, PartyIdx, ProtocolResult, Round, ToNextRound, ToResult,
 };
 use crate::tools::bitvec::BitVec;
 use crate::tools::collections::HoleVec;
@@ -59,6 +59,13 @@ enum KeyRefreshErrorEnum<P: SchemeParams> {
         x: Scalar,
         mu: Randomizer<P::Paillier>,
     },
+}
+
+impl<P: SchemeParams> EvidenceRequiresMessages for KeyRefreshError<P> {
+    type Messages = ();
+    fn requires_messages(&self) -> Vec<(u8, bool)> {
+        unimplemented!()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

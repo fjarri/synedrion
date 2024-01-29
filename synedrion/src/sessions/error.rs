@@ -3,13 +3,15 @@ use alloc::string::String;
 use displaydoc::Display;
 
 use super::echo::EchoError;
+use super::evidence::Evidence;
 use crate::rounds::ProtocolResult;
 
 /// Possible errors returned by session methods.
 #[derive(Clone, Debug)]
-pub enum Error<Res: ProtocolResult, Verifier> {
+pub enum Error<Res: ProtocolResult, Verifier, Sig> {
     /// Indicates an error on this party's side.
     Local(LocalError),
+    Evidence(Evidence<Res, Sig>),
     /// A provable fault of another party.
     // TODO (#43): attach the party's messages up to this round
     // for this to be verifiable by a third party
