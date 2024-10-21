@@ -514,4 +514,129 @@ mod tests {
             assert_eq!(public, share.public_shares[&share.owner]);
         }
     }
+
+    #[test]
+    fn execute_key_reshare_jesse() {
+        let mut shared_randomness = [0u8; 32];
+        OsRng.fill_bytes(&mut shared_randomness);
+
+        let ids = [Id(0), Id(1), Id(2), Id(3)];
+
+        let old_holders = BTreeSet::from([ids[0], ids[1], ids[3]]);
+        let new_holders = BTreeSet::from([ids[1], ids[2], ids[3]]);
+        let participating_old_holders = BTreeSet::from([ids[0], ids[1]]);
+
+        let old_key_shares =
+            ThresholdKeyShare::<TestParams, Id>::new_centralized(&mut OsRng, &old_holders, 2, None);
+        let old_vkey = old_key_shares[&ids[0]].verifying_key();
+
+        // A, old holder, not a new holder
+        let party0 = Round1::new(
+            &mut OsRng,
+            &shared_randomness,
+            BTreeSet::from([ids[1], ids[2], ids[3]]),
+            ids[0],
+            KeyResharingInputs {
+                old_holder: Some(OldHolder {
+                    key_share: old_key_shares[&ids[0]].clone(),
+                }),
+                new_holder: None,
+                new_holders: new_holders.clone(),
+                new_threshold: 2,
+            },
+        )
+        .unwrap();
+
+        // B, old holder, new holder
+        let party1 = Round1::new(
+            &mut OsRng,
+            &shared_randomness,
+            BTreeSet::from([ids[0], ids[2], ids[3]]),
+            ids[1],
+            KeyResharingInputs {
+                old_holder: Some(OldHolder {
+                    key_share: old_key_shares[&ids[1]].clone(),
+                }),
+                new_holder: Some(NewHolder {
+                    verifying_key: old_vkey,
+                    old_threshold: 2,
+                    old_holders: participating_old_holders.clone(),
+                }),
+                new_holders: new_holders.clone(),
+                new_threshold: 2,
+            },
+        )
+        .unwrap();
+
+        // C, not an old holder, new holder
+        let party2 = Round1::new(
+            &mut OsRng,
+            &shared_randomness,
+            BTreeSet::from([ids[0], ids[1], ids[3]]),
+            ids[2],
+            KeyResharingInputs {
+                old_holder: None,
+                new_holder: Some(NewHolder {
+                    verifying_key: old_vkey,
+                    old_threshold: 2,
+                    old_holders: participating_old_holders.clone(),
+                }),
+                new_holders: new_holders.clone(),
+                new_threshold: 2,
+            },
+        )
+        .unwrap();
+
+        // D, old holder (but not providing a share), new holder
+        let party3 = Round1::new(
+            &mut OsRng,
+            &shared_randomness,
+            BTreeSet::from([ids[0], ids[1], ids[2]]),
+            ids[3],
+            KeyResharingInputs {
+                old_holder: None,
+                new_holder: Some(NewHolder {
+                    verifying_key: old_vkey,
+                    old_threshold: 2,
+                    old_holders: participating_old_holders.clone(),
+                }),
+                new_holders: new_holders.clone(),
+                new_threshold: 2,
+            },
+        )
+        .unwrap();
+
+        let r1 = BTreeMap::from([
+            (ids[0], party0),
+            (ids[1], party1),
+            (ids[2], party2),
+            (ids[3], party3),
+        ]);
+
+        let r1a = step_round(&mut OsRng, r1).unwrap();
+        let shares = step_result(&mut OsRng, r1a).unwrap();
+
+        // Check that the party that is not among the new holders gets None as a result
+        assert!(shares[&ids[0]].is_none());
+
+        // Unwrap the results of the new holders
+        let shares = shares
+            .into_iter()
+            .filter(|(id, _share)| id != &ids[0])
+            .map(|(id, share)| (id, share.unwrap()))
+            .collect::<BTreeMap<_, _>>();
+
+        // Check that all public information is the same between the shares
+        let public_sets = shares
+            .iter()
+            .map(|(id, share)| (*id, share.public_shares.clone()))
+            .collect::<BTreeMap<_, _>>();
+        assert!(public_sets.values().all(|pk| pk == &public_sets[&ids[1]]));
+
+        // Check that the public keys correspond to the secret key shares
+        for share in shares.values() {
+            let public = share.secret_share.expose_secret().mul_by_generator();
+            assert_eq!(public, share.public_shares[&share.owner]);
+        }
+    }
 }
