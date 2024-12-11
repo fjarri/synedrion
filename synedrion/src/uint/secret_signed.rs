@@ -110,7 +110,7 @@ where
 
 impl<T> SecretSigned<T>
 where
-    T: ConditionallySelectable + Zeroize + Bounded + Encoding + Integer,
+    T: ConditionallySelectable + Zeroize + Bounded + Integer,
 {
     pub fn conditional_select(a: &Self, b: &Self, choice: Choice) -> Self {
         Self {

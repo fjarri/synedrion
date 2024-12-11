@@ -6,7 +6,7 @@ use core::{
 use crypto_bigint::{
     modular::Retrieve,
     subtle::{Choice, ConditionallyNegatable, ConditionallySelectable},
-    Bounded, Encoding, Integer, Monty, NonZero,
+    Integer, Monty, NonZero,
 };
 use secrecy::{ExposeSecret, ExposeSecretMut, SecretBox};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -14,7 +14,7 @@ use zeroize::Zeroize;
 
 use crate::{
     curve::{Point, Scalar},
-    uint::{Exponentiable, HasWide, PublicBounded, PublicSigned},
+    uint::{Exponentiable, HasWide},
 };
 
 /// A helper wrapper for managing secret values.
@@ -328,31 +328,17 @@ impl<T: Zeroize + Retrieve<Output: Zeroize + Clone>> Retrieve for Secret<T> {
     }
 }
 
-impl<T: Zeroize> Secret<T> {
-    pub fn pow_bounded_vartime<V>(&self, exponent: &PublicBounded<V>) -> Self
+impl<T: Zeroize + Clone> Secret<T> {
+    pub fn pow<V>(&self, exponent: &V) -> Self
     where
         T: Exponentiable<V>,
-        V: Zeroize + Integer + Bounded + Encoding + ConditionallySelectable,
     {
         // TODO: do we need to implement our own windowed exponentiation to hide the secret?
         // The exponent will be put in a stack array when it's decomposed with a small radix
         // for windowed exponentiation. So if it's secret, it's going to leave traces on the stack.
         // With the multiplication, for example, there's less danger since Uints implement *Assign traits which we use,
         // so theoretically anything secret will be overwritten.
-        Secret::init_with(|| self.expose_secret().pow_bounded_vartime(exponent))
-    }
-
-    pub fn pow_signed_vartime<V>(&self, exponent: &PublicSigned<V>) -> Self
-    where
-        T: Exponentiable<V>,
-        V: Zeroize + Integer + Bounded + Encoding + ConditionallySelectable,
-    {
-        // TODO: do we need to implement our own windowed exponentiation to hide the secret?
-        // The exponent will be put in a stack array when it's decomposed with a small radix
-        // for windowed exponentiation. So if it's secret, it's going to leave traces on the stack.
-        // With the multiplication, for example, there's less danger since Uints implement *Assign traits which we use,
-        // so theoretically anything secret will be overwritten.
-        Secret::init_with(|| self.expose_secret().pow_signed_vartime(exponent))
+        Secret::init_with(|| self.expose_secret().pow(exponent))
     }
 }
 

@@ -62,7 +62,7 @@ impl<P: PaillierParams> Randomizer<P> {
     /// Converts the randomizer to a publishable form by masking it with another randomizer and a public exponent.
     pub fn to_masked(&self, coeff: &Self, exponent: &PublicSigned<P::Uint>) -> MaskedRandomizer<P> {
         MaskedRandomizer(
-            (self.randomizer_mod.pow_signed_vartime(exponent) * &coeff.randomizer_mod)
+            (self.randomizer_mod.pow(exponent) * &coeff.randomizer_mod)
                 .expose_secret()
                 .retrieve(),
         )
@@ -132,7 +132,7 @@ impl<P: PaillierParams> Ciphertext<P> {
         let pk_modulus = pk.modulus_bounded().to_wide();
         let factor2 = randomizer
             .to_montgomery(pk.monty_params_mod_n_squared())
-            .pow_bounded_vartime(&pk_modulus);
+            .pow(&pk_modulus);
 
         let ciphertext = *(factor1 * factor2).expose_secret();
 
@@ -162,7 +162,7 @@ impl<P: PaillierParams> Ciphertext<P> {
         let pk_modulus = pk.modulus_bounded().to_wide();
         let factor2 = randomizer
             .to_montgomery(pk.monty_params_mod_n_squared())
-            .pow_bounded_vartime(&pk_modulus);
+            .pow(&pk_modulus);
 
         let ciphertext = factor1 * factor2;
 
@@ -238,7 +238,7 @@ impl<P: PaillierParams> Ciphertext<P> {
         // (because `N` itself fits into `Uint`).
 
         // Calculate `C^phi mod N^2`. The result is already secret.
-        let t = Secret::init_with(|| self.ciphertext.pow_bounded(&totient_wide));
+        let t = Secret::init_with(|| self.ciphertext.pow(&totient_wide));
         let one = P::WideUintMod::one(pk.monty_params_mod_n_squared().clone());
         let x = (t - &one).retrieve() / pk.modulus_wide_nonzero();
         let x = Secret::init_with(|| {
@@ -293,7 +293,7 @@ impl<P: PaillierParams> Ciphertext<P> {
         // To isolate `rho`, calculate `(rho^N)^(N^(-1)) mod N`.
         // The order of `Z_N` is `phi(N)`, so the inversion in the exponent is modulo `phi(N)`.
         let sk_inv_modulus = sk.inv_modulus();
-        let randomizer_mod = Secret::init_with(|| ciphertext_mod_n.pow_bounded(sk_inv_modulus));
+        let randomizer_mod = Secret::init_with(|| ciphertext_mod_n.pow(sk_inv_modulus));
 
         Randomizer::new_mod(randomizer_mod)
     }
@@ -306,21 +306,21 @@ impl<P: PaillierParams> Ciphertext<P> {
     fn homomorphic_mul(self, rhs: &SecretSigned<P::Uint>) -> Self {
         Self {
             pk: self.pk,
-            ciphertext: self.ciphertext.pow_signed(&rhs.to_wide()),
+            ciphertext: self.ciphertext.pow(&rhs.to_wide()),
         }
     }
 
     fn homomorphic_mul_ref_public(&self, rhs: &PublicSigned<P::Uint>) -> Self {
         Self {
             pk: self.pk.clone(),
-            ciphertext: self.ciphertext.pow_signed_vartime(&rhs.to_wide()),
+            ciphertext: self.ciphertext.pow(&rhs.to_wide()),
         }
     }
 
     fn homomorphic_mul_ref(&self, rhs: &SecretSigned<P::Uint>) -> Self {
         Self {
             pk: self.pk.clone(),
-            ciphertext: self.ciphertext.pow_signed(&rhs.to_wide()),
+            ciphertext: self.ciphertext.pow(&rhs.to_wide()),
         }
     }
 
@@ -330,7 +330,7 @@ impl<P: PaillierParams> Ciphertext<P> {
         // But this method is only used once, so it's not a problem to spell it out.
         Self {
             pk: self.pk.clone(),
-            ciphertext: self.ciphertext.pow_signed_vartime(rhs),
+            ciphertext: self.ciphertext.pow(rhs),
         }
     }
 
@@ -338,7 +338,7 @@ impl<P: PaillierParams> Ciphertext<P> {
         let rhs_wide = rhs.to_wide();
         Self {
             pk: self.pk.clone(),
-            ciphertext: self.ciphertext.pow_bounded(&rhs_wide),
+            ciphertext: self.ciphertext.pow(&rhs_wide),
         }
     }
 
@@ -356,7 +356,7 @@ impl<P: PaillierParams> Ciphertext<P> {
             .to_wide()
             .to_montgomery(self.pk.monty_params_mod_n_squared());
         let pk_modulus = self.pk.modulus_bounded().to_wide();
-        let ciphertext = self.ciphertext * randomizer_mod.pow_bounded_vartime(&pk_modulus);
+        let ciphertext = self.ciphertext * randomizer_mod.pow(&pk_modulus);
         Self {
             pk: self.pk,
             ciphertext,
@@ -369,7 +369,7 @@ impl<P: PaillierParams> Ciphertext<P> {
             .to_wide()
             .to_montgomery(self.pk.monty_params_mod_n_squared());
         let pk_modulus = self.pk.modulus_bounded().to_wide();
-        let ciphertext = self.ciphertext * randomizer_mod.pow_bounded_vartime(&pk_modulus).expose_secret();
+        let ciphertext = self.ciphertext * randomizer_mod.pow(&pk_modulus).expose_secret();
         Self {
             pk: self.pk,
             ciphertext,

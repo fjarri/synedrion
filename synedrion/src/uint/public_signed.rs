@@ -1,6 +1,7 @@
 use alloc::{boxed::Box, format, string::String};
 use core::ops::{Mul, Neg, Sub};
 
+use crypto_bigint::Bounded;
 use digest::XofReader;
 use serde::{Deserialize, Serialize};
 use serde_encoded_bytes::{Hex, SliceLike};
@@ -22,7 +23,7 @@ struct PackedSigned {
 
 impl<T> From<PublicSigned<T>> for PackedSigned
 where
-    T: Integer + Encoding + crypto_bigint::Bounded,
+    T: Integer + Encoding + Bounded,
 {
     fn from(val: PublicSigned<T>) -> Self {
         let repr = val.abs().to_be_bytes();
@@ -38,7 +39,7 @@ where
 
 impl<T> TryFrom<PackedSigned> for PublicSigned<T>
 where
-    T: Integer + Encoding + crypto_bigint::Bounded,
+    T: Integer + Encoding + Bounded,
 {
     type Error = String;
     fn try_from(val: PackedSigned) -> Result<Self, Self::Error> {
@@ -68,7 +69,7 @@ where
 #[serde(
     try_from = "PackedSigned",
     into = "PackedSigned",
-    bound = "T: Integer + Encoding + crypto_bigint::Bounded"
+    bound = "T: Integer + Encoding + Bounded"
 )]
 pub(crate) struct PublicSigned<T> {
     /// bound on the bit size of the absolute value
@@ -87,7 +88,7 @@ impl<T> From<SecretSigned<T>> for PublicSigned<T> {
 
 impl<T> PublicSigned<T>
 where
-    T: Integer + crypto_bigint::Bounded,
+    T: Integer + Bounded,
 {
     fn new_from_abs(abs_value: T, bound: u32, is_negative: bool) -> Option<Self> {
         if bound >= T::BITS || abs_value.bits_vartime() > bound {
@@ -173,7 +174,7 @@ where
 
 impl<T> PublicSigned<T>
 where
-    T: Integer + crypto_bigint::Bounded + Encoding,
+    T: Integer + Bounded + Encoding,
 {
     /// Returns a value in range `[-bound, bound]` derived from an extendable-output hash.
     ///
@@ -181,7 +182,7 @@ where
     /// since it is guaranteed to produce the same results on 32- and 64-bit platforms.
     pub fn from_xof_reader_bounded(rng: &mut impl XofReader, bound: &NonZero<T>) -> Self {
         let bound_bits = bound.as_ref().bits_vartime();
-        assert!(bound_bits < <T as crypto_bigint::Bounded>::BITS);
+        assert!(bound_bits < <T as Bounded>::BITS);
         // Will not overflow because of the assertion above
         let positive_bound = bound
             .as_ref()
@@ -200,8 +201,8 @@ where
 
 impl<T> PublicSigned<T>
 where
-    T: crypto_bigint::Bounded + HasWide + Encoding + Integer,
-    T::Wide: crypto_bigint::Bounded,
+    T: Bounded + HasWide + Encoding + Integer,
+    T::Wide: Bounded,
 {
     /// Returns a [`PublicSigned`] with the same value, but twice the bit-width.
     pub fn to_wide(&self) -> PublicSigned<T::Wide> {
@@ -215,7 +216,7 @@ use super::SecretSigned;
 
 impl<T> Neg for PublicSigned<T>
 where
-    T: Integer + crypto_bigint::Bounded,
+    T: Integer + Bounded,
 {
     type Output = PublicSigned<T>;
 
@@ -226,7 +227,7 @@ where
 
 impl<T> Neg for &PublicSigned<T>
 where
-    T: Integer + crypto_bigint::Bounded,
+    T: Integer + Bounded,
 {
     type Output = PublicSigned<T>;
 
@@ -237,7 +238,7 @@ where
 
 impl<T> Sub<PublicSigned<T>> for PublicSigned<T>
 where
-    T: Integer + crypto_bigint::Bounded,
+    T: Integer + Bounded,
 {
     type Output = PublicSigned<T>;
 
@@ -249,7 +250,7 @@ where
 
 impl<T> Mul<PublicSigned<T>> for PublicSigned<T>
 where
-    T: Integer + crypto_bigint::Bounded,
+    T: Integer + Bounded,
 {
     type Output = PublicSigned<T>;
 

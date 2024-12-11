@@ -37,7 +37,7 @@ struct PrmCommitment<P: SchemeParams>(Vec<<P::Paillier as PaillierParams>::Uint>
 
 impl<P: SchemeParams> PrmCommitment<P> {
     fn new(secret: &PrmSecret<P>, base: &<P::Paillier as PaillierParams>::UintMod) -> Self {
-        let commitment = secret.0.iter().map(|a| base.pow_bounded(a).retrieve()).collect();
+        let commitment = secret.0.iter().map(|a| base.pow(a).retrieve()).collect();
         Self(commitment)
     }
 }
@@ -126,7 +126,7 @@ impl<P: SchemeParams> PrmProof<P> {
             let z = self.proof[i];
             let e = challenge.0[i];
             let a = self.commitment.0[i].to_montgomery(monty_params);
-            let pwr = setup.base_randomizer().pow_signed_vartime(&z);
+            let pwr = setup.base_randomizer().pow(&z);
             let test = if e { pwr == a * setup.base_value() } else { pwr == a };
             if !test {
                 return false;

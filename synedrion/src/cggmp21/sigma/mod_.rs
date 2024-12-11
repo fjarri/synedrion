@@ -115,7 +115,7 @@ impl<P: SchemeParams> ModProof<P> {
 
                 let y = challenge.0[i].to_montgomery(pk.monty_params_mod_n());
                 let sk_inv_modulus = sk.inv_modulus();
-                let z = y.pow_bounded(sk_inv_modulus);
+                let z = y.pow(sk_inv_modulus);
 
                 ModProofElem {
                     x: y_4th,
@@ -162,7 +162,7 @@ impl<P: SchemeParams> ModProof<P> {
             let z_m = elem.z.to_montgomery(monty_params);
             let mut y_m = y.to_montgomery(monty_params);
             let pk_modulus = pk.modulus_bounded();
-            if z_m.pow_bounded_vartime(&pk_modulus) != y_m {
+            if z_m.pow(&pk_modulus) != y_m {
                 return false;
             }
 
