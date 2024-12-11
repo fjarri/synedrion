@@ -2,7 +2,8 @@ use crypto_bigint::{
     modular::MontyForm,
     nlimbs,
     subtle::{ConditionallySelectable, CtOption},
-    Bounded, Encoding, Integer, Invert, PowBoundedExp, RandomMod, Uint, Zero, U1024, U2048, U4096, U512, U8192,
+    Bounded, ConcatMixed, Encoding, Integer, Invert, PowBoundedExp, RandomMod, SplitMixed, WideningMul, Zero, U1024,
+    U2048, U4096, U512, U8192,
 };
 use zeroize::Zeroize;
 
@@ -70,22 +71,27 @@ where
     }
 }
 
-pub trait HasWide: Sized + Zero {
-    type Wide: Integer + Encoding + RandomMod;
-    fn mul_wide(&self, other: &Self) -> Self::Wide;
-    fn square_wide(&self) -> Self::Wide;
+pub trait HasWide:
+    Sized + Zero + Integer + for<'a> WideningMul<&'a Self, Output = Self::Wide> + ConcatMixed<MixedOutput = Self::Wide>
+{
+    type Wide: Integer + Encoding + RandomMod + SplitMixed<Self, Self>;
+
+    fn mul_wide(&self, other: &Self) -> Self::Wide {
+        self.widening_mul(other)
+    }
 
     /// Converts `self` to a new `Wide` uint, setting the higher half to `0`s.
-    /// Consumes `self`.
-    fn to_wide(&self) -> Self::Wide;
+    fn to_wide(&self) -> Self::Wide {
+        // Note that this minimizes the presense of `self` on the stack (to the extent we can ensure it),
+        // in case it is secret.
+        Self::concat_mixed(self, &Self::zero())
+    }
 
     /// Splits a `Wide` in two halves and returns the halves (`Self` sized) in a
     /// tuple (lower half first).
-    ///
-    /// *Note*: The behaviour of this method has changed in v0.2. Previously,
-    /// the order of the halves was `(hi, lo)` but after v0.2 the order is `(lo,
-    /// hi)`.
-    fn from_wide(value: &Self::Wide) -> (Self, Self);
+    fn from_wide(value: &Self::Wide) -> (Self, Self) {
+        value.split_mixed()
+    }
 
     /// Tries to convert a `Wide` into a `Self` sized uint. Splits a `Wide`
     /// value in two halves and returns the lower half if the high half is zero.
@@ -101,66 +107,18 @@ pub trait HasWide: Sized + Zero {
 
 impl HasWide for U512 {
     type Wide = U1024;
-    fn mul_wide(&self, other: &Self) -> Self::Wide {
-        self.widening_mul(other)
-    }
-    fn square_wide(&self) -> Self::Wide {
-        self.square_wide().into()
-    }
-    fn to_wide(&self) -> Self::Wide {
-        Uint::concat_mixed(self, &Self::ZERO)
-    }
-    fn from_wide(value: &Self::Wide) -> (Self, Self) {
-        value.split_mixed()
-    }
 }
 
 impl HasWide for U1024 {
     type Wide = U2048;
-    fn mul_wide(&self, other: &Self) -> Self::Wide {
-        self.widening_mul(other)
-    }
-    fn square_wide(&self) -> Self::Wide {
-        self.square_wide().into()
-    }
-    fn to_wide(&self) -> Self::Wide {
-        Uint::concat_mixed(self, &Self::ZERO)
-    }
-    fn from_wide(value: &Self::Wide) -> (Self, Self) {
-        value.split_mixed()
-    }
 }
 
 impl HasWide for U2048 {
     type Wide = U4096;
-    fn mul_wide(&self, other: &Self) -> Self::Wide {
-        self.widening_mul(other)
-    }
-    fn square_wide(&self) -> Self::Wide {
-        self.square_wide().into()
-    }
-    fn to_wide(&self) -> Self::Wide {
-        Uint::concat_mixed(self, &Self::ZERO)
-    }
-    fn from_wide(value: &Self::Wide) -> (Self, Self) {
-        value.split_mixed()
-    }
 }
 
 impl HasWide for U4096 {
     type Wide = U8192;
-    fn mul_wide(&self, other: &Self) -> Self::Wide {
-        self.widening_mul(other)
-    }
-    fn square_wide(&self) -> Self::Wide {
-        self.square_wide().into()
-    }
-    fn to_wide(&self) -> Self::Wide {
-        Uint::concat_mixed(self, &Self::ZERO)
-    }
-    fn from_wide(value: &Self::Wide) -> (Self, Self) {
-        value.split_mixed()
-    }
 }
 
 pub type U512Mod = MontyForm<{ nlimbs!(512) }>;

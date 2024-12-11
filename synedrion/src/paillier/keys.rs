@@ -317,7 +317,7 @@ pub(crate) struct PublicKeyPaillier<P: PaillierParams> {
 impl<P: PaillierParams> PublicKeyPaillier<P> {
     fn new(modulus: PublicModulus<P>) -> Self {
         let monty_params_mod_n_squared = P::WideUintMod::new_params_vartime(
-            Odd::new(modulus.modulus().square_wide()).expect("Square of odd number is odd"),
+            Odd::new(modulus.modulus().mul_wide(modulus.modulus())).expect("Square of odd number is odd"),
         );
 
         let public_key_wire = PublicKeyPaillierWire {
