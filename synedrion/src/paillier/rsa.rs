@@ -127,16 +127,12 @@ impl<P: PaillierParams> SecretPrimes<P> {
         Secret::init_with(|| self.primes.q.expose_secret().to_wide())
     }
 
-    pub fn p_signed(&self) -> Secret<SecretSigned<P::Uint>> {
-        Secret::init_with(|| {
-            SecretSigned::new_positive(*self.p().expose_secret(), P::PRIME_BITS).expect("`P::PRIME_BITS` is valid")
-        })
+    pub fn p_signed(&self) -> SecretSigned<P::Uint> {
+        SecretSigned::new_positive(*self.p().expose_secret(), P::PRIME_BITS).expect("`P::PRIME_BITS` is valid")
     }
 
-    pub fn q_signed(&self) -> Secret<SecretSigned<P::Uint>> {
-        Secret::init_with(|| {
-            SecretSigned::new_positive(*self.q().expose_secret(), P::PRIME_BITS).expect("`P::PRIME_BITS` is valid")
-        })
+    pub fn q_signed(&self) -> SecretSigned<P::Uint> {
+        SecretSigned::new_positive(*self.q().expose_secret(), P::PRIME_BITS).expect("`P::PRIME_BITS` is valid")
     }
 
     pub fn p_nonzero(&self) -> Secret<NonZero<P::Uint>> {
@@ -147,7 +143,7 @@ impl<P: PaillierParams> SecretPrimes<P> {
         Secret::init_with(|| NonZero::new(*self.q().expose_secret()).expect("`q` is non-zero"))
     }
 
-    pub fn p_wide_signed(&self) -> Secret<SecretSigned<P::WideUint>> {
+    pub fn p_wide_signed(&self) -> SecretSigned<P::WideUint> {
         self.p_signed().to_wide()
     }
 

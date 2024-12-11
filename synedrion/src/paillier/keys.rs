@@ -162,15 +162,15 @@ where
         }
     }
 
-    pub fn p_signed(&self) -> Secret<SecretSigned<P::Uint>> {
+    pub fn p_signed(&self) -> SecretSigned<P::Uint> {
         self.primes.p_signed()
     }
 
-    pub fn q_signed(&self) -> Secret<SecretSigned<P::Uint>> {
+    pub fn q_signed(&self) -> SecretSigned<P::Uint> {
         self.primes.q_signed()
     }
 
-    pub fn p_wide_signed(&self) -> Secret<SecretSigned<P::WideUint>> {
+    pub fn p_wide_signed(&self) -> SecretSigned<P::WideUint> {
         self.primes.p_wide_signed()
     }
 

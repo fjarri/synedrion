@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     entities::{AuxInfo, KeyShareChange, PublicAuxInfo, SecretAuxInfo},
-    params::{secret_scalar_from_uint, secret_uint_from_scalar, SchemeParams},
+    params::{secret_bounded_from_scalar, secret_scalar_from_uint, SchemeParams},
     sigma::{FacProof, ModProof, PrmProof, SchCommitment, SchProof, SchSecret},
 };
 use crate::{
@@ -605,7 +605,7 @@ impl<P: SchemeParams, I: PartyId> Round<I> for Round3<P, I> {
 
         let x_secret = &self.context.x_to_send[destination];
         let x_public = self.context.data_precomp.data.cap_x_to_send[destination_idx];
-        let ciphertext = Ciphertext::new(rng, &data.paillier_pk, &secret_uint_from_scalar::<P>(x_secret));
+        let ciphertext = Ciphertext::new(rng, &data.paillier_pk, &secret_bounded_from_scalar::<P>(x_secret));
 
         let psi_sch = SchProof::new(
             &self.context.tau_x[destination],

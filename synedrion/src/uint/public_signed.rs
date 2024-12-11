@@ -1,5 +1,5 @@
 use alloc::{boxed::Box, format, string::String};
-use core::ops::{Add, Mul, Neg, Sub};
+use core::ops::{Mul, Neg, Sub};
 
 use digest::XofReader;
 use serde::{Deserialize, Serialize};
@@ -212,7 +212,6 @@ where
 }
 
 use super::SecretSigned;
-use crate::tools::Secret;
 
 impl<T> Neg for PublicSigned<T>
 where
@@ -257,38 +256,5 @@ where
     fn mul(self, rhs: PublicSigned<T>) -> Self::Output {
         self.checked_mul(&rhs)
             .expect("the calling code ensured the bound is not overflown")
-    }
-}
-
-impl<T> Add<PublicSigned<T>> for Secret<SecretSigned<T>>
-where
-    T: Integer + crypto_bigint::Bounded + Zeroize,
-{
-    type Output = Secret<SecretSigned<T>>;
-
-    fn add(self, rhs: PublicSigned<T>) -> Self::Output {
-        Secret::init_with(|| self.expose_secret().add_public(&rhs))
-    }
-}
-
-impl<T> Mul<PublicSigned<T>> for &Secret<SecretSigned<T>>
-where
-    T: Integer + crypto_bigint::Bounded + Zeroize,
-{
-    type Output = Secret<SecretSigned<T>>;
-
-    fn mul(self, rhs: PublicSigned<T>) -> Self::Output {
-        Secret::init_with(|| self.expose_secret().mul_by_public(&rhs))
-    }
-}
-
-impl<T> Mul<PublicSigned<T>> for Secret<SecretSigned<T>>
-where
-    T: Integer + crypto_bigint::Bounded + Zeroize,
-{
-    type Output = Secret<SecretSigned<T>>;
-
-    fn mul(self, rhs: PublicSigned<T>) -> Self::Output {
-        Secret::init_with(|| self.expose_secret().mul_by_public(&rhs))
     }
 }

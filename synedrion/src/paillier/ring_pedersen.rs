@@ -102,32 +102,22 @@ impl<P: PaillierParams> RPParams<P> {
     }
 
     /// Creates a commitment for a secret `value` with a secret `randomizer`.
-    pub fn commit(
-        &self,
-        value: &Secret<SecretSigned<P::Uint>>,
-        randomizer: &Secret<SecretSigned<P::WideUint>>,
-    ) -> RPCommitment<P> {
-        RPCommitment(
-            self.base_value.pow_signed(value.expose_secret())
-                * self.base_randomizer.pow_signed_wide(randomizer.expose_secret()),
-        )
+    pub fn commit(&self, value: &SecretSigned<P::Uint>, randomizer: &SecretSigned<P::WideUint>) -> RPCommitment<P> {
+        RPCommitment(self.base_value.pow_signed(value) * self.base_randomizer.pow_signed_wide(randomizer))
     }
 
     /// Creates a commitment for a secret `value` with a secret `randomizer`.
     pub fn commit_wide(
         &self,
-        value: &Secret<SecretSigned<P::WideUint>>,
-        randomizer: &Secret<SecretSigned<P::WideUint>>,
+        value: &SecretSigned<P::WideUint>,
+        randomizer: &SecretSigned<P::WideUint>,
     ) -> RPCommitment<P> {
-        RPCommitment(
-            self.base_value.pow_signed_wide(value.expose_secret())
-                * self.base_randomizer.pow_signed_wide(randomizer.expose_secret()),
-        )
+        RPCommitment(self.base_value.pow_signed_wide(value) * self.base_randomizer.pow_signed_wide(randomizer))
     }
 
     /// Creates a commitment for a secret `randomizer` and the value 0.
-    pub fn commit_zero_xwide(&self, randomizer: &Secret<SecretSigned<P::ExtraWideUint>>) -> RPCommitment<P> {
-        RPCommitment(self.base_randomizer.pow_signed_extra_wide(randomizer.expose_secret()))
+    pub fn commit_zero_xwide(&self, randomizer: &SecretSigned<P::ExtraWideUint>) -> RPCommitment<P> {
+        RPCommitment(self.base_randomizer.pow_signed_extra_wide(randomizer))
     }
 
     /// Creates a commitment for a public `value` with a public `randomizer`.
@@ -227,8 +217,8 @@ impl<P: PaillierParams> RPCommitment<P> {
     }
 
     /// Raise to the power of `exponent`.
-    pub fn pow_signed_wide(&self, exponent: &Secret<SecretSigned<P::WideUint>>) -> Self {
-        Self(self.0.pow_signed_wide(exponent.expose_secret()))
+    pub fn pow_signed_wide(&self, exponent: &SecretSigned<P::WideUint>) -> Self {
+        Self(self.0.pow_signed_wide(exponent))
     }
 }
 

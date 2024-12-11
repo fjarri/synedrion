@@ -1,4 +1,4 @@
-use crypto_bigint::{Bounded, Integer, NonZero};
+use crypto_bigint::{Bounded, Integer, Monty, NonZero};
 use zeroize::Zeroize;
 
 use super::{HasWide, SecretSigned};
@@ -48,12 +48,35 @@ where
         }
     }
 
-    pub fn to_signed(&self) -> Option<Secret<SecretSigned<T>>> {
-        Secret::maybe_init_with(|| SecretSigned::new_positive(self.value.expose_secret().clone(), self.bound))
+    pub fn to_signed(&self) -> Option<SecretSigned<T>> {
+        SecretSigned::new_positive(self.value.expose_secret().clone(), self.bound)
     }
 
     pub fn expose_secret(&self) -> &T {
         self.value.expose_secret()
+    }
+}
+
+impl<T> SecretBounded<T>
+where
+    T: Zeroize + Bounded + Integer<Monty: Zeroize>,
+{
+    pub fn to_montgomery(&self, params: &<T::Monty as Monty>::Params) -> Secret<T::Monty> {
+        Secret::init_with(|| <T::Monty as Monty>::new(self.expose_secret().clone(), params.clone()))
+    }
+}
+
+impl<T> SecretBounded<T>
+where
+    T: Zeroize + HasWide + Integer + Bounded,
+    T::Wide: Zeroize + Integer + Bounded,
+{
+    pub fn mul_wide(&self, rhs: &T) -> SecretBounded<T::Wide> {
+        SecretBounded::new(
+            self.value.expose_secret().mul_wide(rhs),
+            self.bound + rhs.bits_vartime(),
+        )
+        .expect("The call to new_positive cannot fail when the input is the absolute value ")
     }
 }
 

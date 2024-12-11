@@ -2,7 +2,7 @@ use crypto_bigint::{
     modular::MontyForm,
     nlimbs,
     subtle::{ConditionallySelectable, CtOption},
-    Encoding, Integer, Invert, PowBoundedExp, RandomMod, Square, Uint, Zero, U1024, U2048, U4096, U512, U8192,
+    Bounded, Encoding, Integer, Invert, PowBoundedExp, RandomMod, Square, Uint, Zero, U1024, U2048, U4096, U512, U8192,
 };
 use zeroize::Zeroize;
 
@@ -22,7 +22,7 @@ pub trait ToMontgomery: Integer {
 pub trait Exponentiable<T>:
     PowBoundedExp<T> + Invert<Output = CtOption<Self>> + ConditionallySelectable + Square + core::ops::Mul<Output = Self>
 where
-    T: Zeroize + Integer + crypto_bigint::Bounded + Encoding + ConditionallySelectable,
+    T: Zeroize + Integer + Bounded + Encoding + ConditionallySelectable,
 {
     fn pow_bounded(&self, exponent: &SecretBounded<T>) -> Self {
         self.pow_bounded_exp(exponent.expose_secret(), exponent.bound())
@@ -35,7 +35,7 @@ where
     /// Panics if `self` is not invertible.
     fn pow_signed(&self, exponent: &SecretSigned<T>) -> Self {
         let abs_exponent = exponent.abs();
-        let abs_result = self.pow_bounded_exp(&abs_exponent, exponent.bound());
+        let abs_result = self.pow_bounded_exp(abs_exponent.expose_secret(), exponent.bound());
         let inv_result = abs_result.invert().expect("`self` is assumed to be invertible");
         Self::conditional_select(&abs_result, &inv_result, exponent.is_negative())
     }
@@ -48,10 +48,10 @@ where
     fn pow_signed_wide(&self, exp: &SecretSigned<<T as HasWide>::Wide>) -> Self
     where
         T: HasWide,
-        <T as HasWide>::Wide: crypto_bigint::Bounded + ConditionallySelectable,
+        <T as HasWide>::Wide: Zeroize + Bounded + ConditionallySelectable,
     {
         let exp_abs = exp.abs();
-        let abs = self.pow_wide(&exp_abs, exp.bound());
+        let abs = self.pow_wide(exp_abs.expose_secret(), exp.bound());
         let inv = abs.invert().expect("self is assumed to be invertible");
         Self::conditional_select(&abs, &inv, exp.is_negative())
     }
@@ -60,7 +60,7 @@ where
     where
         T: HasWide,
     {
-        let bits = <T as crypto_bigint::Bounded>::BITS;
+        let bits = <T as Bounded>::BITS;
         let bound = bound % (2 * bits + 1);
 
         let (lo, hi) = <T as HasWide>::from_wide(exp);
@@ -87,14 +87,14 @@ where
     fn pow_signed_extra_wide(&self, exp: &SecretSigned<<<T as HasWide>::Wide as HasWide>::Wide>) -> Self
     where
         T: HasWide,
-        <T as HasWide>::Wide: crypto_bigint::Bounded + ConditionallySelectable + HasWide,
-        <<T as HasWide>::Wide as HasWide>::Wide: crypto_bigint::Bounded + ConditionallySelectable,
+        <T as HasWide>::Wide: Zeroize + Bounded + ConditionallySelectable + HasWide,
+        <<T as HasWide>::Wide as HasWide>::Wide: Zeroize + Bounded + ConditionallySelectable,
     {
-        let bits = <<T as HasWide>::Wide as crypto_bigint::Bounded>::BITS;
+        let bits = <<T as HasWide>::Wide as Bounded>::BITS;
         let bound = exp.bound();
 
         let abs_exponent = exp.abs();
-        let (wlo, whi) = <T as HasWide>::Wide::from_wide(&abs_exponent);
+        let (wlo, whi) = <T as HasWide>::Wide::from_wide(abs_exponent.expose_secret());
 
         let lo_res = self.pow_wide(&wlo, core::cmp::min(bits, bound));
 
@@ -139,7 +139,7 @@ where
     fn pow_signed_wide_vartime(&self, exp: &PublicSigned<<T as HasWide>::Wide>) -> Self
     where
         T: HasWide,
-        <T as HasWide>::Wide: crypto_bigint::Bounded + ConditionallySelectable,
+        <T as HasWide>::Wide: Bounded + ConditionallySelectable,
     {
         let exp_abs = exp.abs();
         let abs_result = self.pow_wide(&exp_abs, exp.bound());
@@ -153,10 +153,10 @@ where
     fn pow_signed_extra_wide_vartime(&self, exp: &PublicSigned<<<T as HasWide>::Wide as HasWide>::Wide>) -> Self
     where
         T: HasWide,
-        <T as HasWide>::Wide: crypto_bigint::Bounded + HasWide,
-        <<T as HasWide>::Wide as HasWide>::Wide: crypto_bigint::Bounded,
+        <T as HasWide>::Wide: Bounded + HasWide,
+        <<T as HasWide>::Wide as HasWide>::Wide: Bounded,
     {
-        let bits = <<T as HasWide>::Wide as crypto_bigint::Bounded>::BITS;
+        let bits = <<T as HasWide>::Wide as Bounded>::BITS;
         let bound = exp.bound();
 
         let abs_exponent = exp.abs();

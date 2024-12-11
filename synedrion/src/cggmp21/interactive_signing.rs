@@ -20,7 +20,8 @@ use serde::{Deserialize, Serialize};
 use super::{
     entities::{AuxInfo, AuxInfoPrecomputed, KeyShare, PresigningData, PresigningValues},
     params::{
-        secret_scalar_from_signed, secret_signed_from_scalar, secret_uint_from_scalar, signed_from_scalar, SchemeParams,
+        secret_bounded_from_scalar, secret_scalar_from_signed, secret_signed_from_scalar, signed_from_scalar,
+        SchemeParams,
     },
     sigma::{AffGProof, DecProof, EncProof, LogStarProof, MulProof, MulStarProof},
 };
@@ -161,10 +162,10 @@ impl<P: SchemeParams, I: PartyId> EntryPoint<I> for InteractiveSigning<P, I> {
         let pk = aux_info.secret_aux.paillier_sk.public_key();
 
         let nu = Randomizer::<P::Paillier>::random(rng, pk);
-        let cap_g = Ciphertext::new_with_randomizer(pk, &secret_uint_from_scalar::<P>(&gamma), &nu);
+        let cap_g = Ciphertext::new_with_randomizer(pk, &secret_bounded_from_scalar::<P>(&gamma), &nu);
 
         let rho = Randomizer::<P::Paillier>::random(rng, pk);
-        let cap_k = Ciphertext::new_with_randomizer(pk, &secret_uint_from_scalar::<P>(&k), &rho);
+        let cap_k = Ciphertext::new_with_randomizer(pk, &secret_bounded_from_scalar::<P>(&k), &rho);
 
         Ok(BoxedRound::new_dynamic(Round1 {
             context: Context {
@@ -388,8 +389,8 @@ struct Round2Message<P: SchemeParams> {
 
 #[derive(Debug, Clone)]
 struct Round2Artifact<P: SchemeParams> {
-    beta: Secret<SecretSigned<<P::Paillier as PaillierParams>::Uint>>,
-    hat_beta: Secret<SecretSigned<<P::Paillier as PaillierParams>::Uint>>,
+    beta: SecretSigned<<P::Paillier as PaillierParams>::Uint>,
+    hat_beta: SecretSigned<<P::Paillier as PaillierParams>::Uint>,
     r: Randomizer<P::Paillier>,
     s: Randomizer<P::Paillier>,
     hat_r: Randomizer<P::Paillier>,
@@ -402,8 +403,8 @@ struct Round2Artifact<P: SchemeParams> {
 
 struct Round2Payload<P: SchemeParams> {
     cap_gamma: Point,
-    alpha: Secret<SecretSigned<<P::Paillier as PaillierParams>::Uint>>,
-    hat_alpha: Secret<SecretSigned<<P::Paillier as PaillierParams>::Uint>>,
+    alpha: SecretSigned<<P::Paillier as PaillierParams>::Uint>,
+    hat_alpha: SecretSigned<<P::Paillier as PaillierParams>::Uint>,
     cap_d: Ciphertext<P::Paillier>,
     hat_cap_d: Ciphertext<P::Paillier>,
 }
@@ -440,8 +441,8 @@ impl<P: SchemeParams, I: PartyId> Round<I> for Round2<P, I> {
 
         let target_pk = &self.context.aux_info.public_aux[destination].paillier_pk;
 
-        let beta = Secret::init_with(|| SecretSigned::random_bounded_bits(rng, P::LP_BOUND));
-        let hat_beta = Secret::init_with(|| SecretSigned::random_bounded_bits(rng, P::LP_BOUND));
+        let beta = SecretSigned::random_bounded_bits(rng, P::LP_BOUND);
+        let hat_beta = SecretSigned::random_bounded_bits(rng, P::LP_BOUND);
         let r = Randomizer::random(rng, pk);
         let s = Randomizer::random(rng, target_pk);
         let hat_r = Randomizer::random(rng, pk);
@@ -610,18 +611,12 @@ impl<P: SchemeParams, I: PartyId> Round<I> for Round2<P, I> {
         // `alpha == x * y + z` where `0 <= x, y < q`, and `-2^l' <= z <= 2^l'`,
         // where `q` is the curve order.
         // We will need this bound later, so we're asserting it.
-        let alpha = Secret::try_init_with(|| {
-            alpha
-                .expose_secret()
-                .assert_bit_bound(core::cmp::max(2 * P::L_BOUND, P::LP_BOUND) + 1)
-                .ok_or_else(|| ReceiveError::protocol(InteractiveSigningError::OutOfBoundsAlpha))
-        })?;
-        let hat_alpha = Secret::try_init_with(|| {
-            hat_alpha
-                .expose_secret()
-                .assert_bit_bound(core::cmp::max(2 * P::L_BOUND, P::LP_BOUND) + 1)
-                .ok_or_else(|| ReceiveError::protocol(InteractiveSigningError::OutOfBoundsHatAlpha))
-        })?;
+        let alpha = alpha
+            .assert_bit_bound(core::cmp::max(2 * P::L_BOUND, P::LP_BOUND) + 1)
+            .ok_or_else(|| ReceiveError::protocol(InteractiveSigningError::OutOfBoundsAlpha))?;
+        let hat_alpha = hat_alpha
+            .assert_bit_bound(core::cmp::max(2 * P::L_BOUND, P::LP_BOUND) + 1)
+            .ok_or_else(|| ReceiveError::protocol(InteractiveSigningError::OutOfBoundsHatAlpha))?;
 
         Ok(Payload::new(Round2Payload::<P> {
             cap_gamma: direct_message.cap_gamma,
@@ -646,15 +641,15 @@ impl<P: SchemeParams, I: PartyId> Round<I> for Round2<P, I> {
 
         let cap_delta = cap_gamma * &self.context.k;
 
-        let alpha_sum: Secret<SecretSigned<_>> = payloads.values().map(|payload| &payload.alpha).sum();
-        let beta_sum: Secret<SecretSigned<_>> = artifacts.values().map(|artifact| &artifact.beta).sum();
+        let alpha_sum: SecretSigned<_> = payloads.values().map(|payload| &payload.alpha).sum();
+        let beta_sum: SecretSigned<_> = artifacts.values().map(|artifact| &artifact.beta).sum();
         let delta = secret_signed_from_scalar::<P>(&self.context.gamma)
             * secret_signed_from_scalar::<P>(&self.context.k)
             + &alpha_sum
             + &beta_sum;
 
-        let hat_alpha_sum: Secret<SecretSigned<_>> = payloads.values().map(|payload| &payload.hat_alpha).sum();
-        let hat_beta_sum: Secret<SecretSigned<_>> = artifacts.values().map(|artifact| &artifact.hat_beta).sum();
+        let hat_alpha_sum: SecretSigned<_> = payloads.values().map(|payload| &payload.hat_alpha).sum();
+        let hat_beta_sum: SecretSigned<_> = artifacts.values().map(|artifact| &artifact.hat_beta).sum();
         let chi = secret_signed_from_scalar::<P>(&self.context.key_share.secret_share)
             * secret_signed_from_scalar::<P>(&self.context.k)
             + &hat_alpha_sum
@@ -683,8 +678,8 @@ impl<P: SchemeParams, I: PartyId> Round<I> for Round2<P, I> {
 #[derive(Debug)]
 struct Round3<P: SchemeParams, I: Ord> {
     context: Context<P, I>,
-    delta: Secret<SecretSigned<<P::Paillier as PaillierParams>::Uint>>,
-    chi: Secret<SecretSigned<<P::Paillier as PaillierParams>::Uint>>,
+    delta: SecretSigned<<P::Paillier as PaillierParams>::Uint>,
+    chi: SecretSigned<<P::Paillier as PaillierParams>::Uint>,
     cap_delta: Point,
     cap_gamma: Point,
     all_cap_k: BTreeMap<I, Ciphertext<P::Paillier>>,

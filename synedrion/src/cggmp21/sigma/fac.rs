@@ -6,10 +6,7 @@ use serde::{Deserialize, Serialize};
 use super::super::SchemeParams;
 use crate::{
     paillier::{PaillierParams, PublicKeyPaillier, RPCommitmentWire, RPParams, SecretKeyPaillier},
-    tools::{
-        hashing::{Chain, Hashable, XofHasher},
-        Secret,
-    },
+    tools::hashing::{Chain, Hashable, XofHasher},
     uint::{HasWide, Integer, PublicSigned, SecretSigned},
 };
 
@@ -61,12 +58,10 @@ impl<P: SchemeParams> FacProof<P> {
         let sqrt_cap_n =
             <P::Paillier as PaillierParams>::Uint::one() << (<P::Paillier as PaillierParams>::PRIME_BITS - 2);
 
-        let alpha =
-            Secret::init_with(|| SecretSigned::random_bounded_bits_scaled(rng, P::L_BOUND + P::EPS_BOUND, &sqrt_cap_n));
-        let beta =
-            Secret::init_with(|| SecretSigned::random_bounded_bits_scaled(rng, P::L_BOUND + P::EPS_BOUND, &sqrt_cap_n));
-        let mu = Secret::init_with(|| SecretSigned::random_bounded_bits_scaled(rng, P::L_BOUND, hat_cap_n));
-        let nu = Secret::init_with(|| SecretSigned::random_bounded_bits_scaled(rng, P::L_BOUND, hat_cap_n));
+        let alpha = SecretSigned::random_bounded_bits_scaled(rng, P::L_BOUND + P::EPS_BOUND, &sqrt_cap_n);
+        let beta = SecretSigned::random_bounded_bits_scaled(rng, P::L_BOUND + P::EPS_BOUND, &sqrt_cap_n);
+        let mu = SecretSigned::random_bounded_bits_scaled(rng, P::L_BOUND, hat_cap_n);
+        let nu = SecretSigned::random_bounded_bits_scaled(rng, P::L_BOUND, hat_cap_n);
 
         // N_0 \hat{N}
         let scale = pk0.modulus().mul_wide(hat_cap_n);
@@ -78,17 +73,13 @@ impl<P: SchemeParams> FacProof<P> {
                 &scale,
             ),
         );
-        let r = Secret::init_with(|| {
-            SecretSigned::<<P::Paillier as PaillierParams>::Uint>::random_bounded_bits_scaled_wide(
-                rng,
-                P::L_BOUND + P::EPS_BOUND,
-                &scale,
-            )
-        });
-        let x =
-            Secret::init_with(|| SecretSigned::random_bounded_bits_scaled(rng, P::L_BOUND + P::EPS_BOUND, hat_cap_n));
-        let y =
-            Secret::init_with(|| SecretSigned::random_bounded_bits_scaled(rng, P::L_BOUND + P::EPS_BOUND, hat_cap_n));
+        let r = SecretSigned::<<P::Paillier as PaillierParams>::Uint>::random_bounded_bits_scaled_wide(
+            rng,
+            P::L_BOUND + P::EPS_BOUND,
+            &scale,
+        );
+        let x = SecretSigned::random_bounded_bits_scaled(rng, P::L_BOUND + P::EPS_BOUND, hat_cap_n);
+        let y = SecretSigned::random_bounded_bits_scaled(rng, P::L_BOUND + P::EPS_BOUND, hat_cap_n);
 
         let p = sk0.p_signed();
         let q = sk0.q_signed();
@@ -120,12 +111,12 @@ impl<P: SchemeParams> FacProof<P> {
 
         let p_wide = sk0.p_wide_signed();
 
-        let hat_sigma = sigma - PublicSigned::from(*(p_wide * &nu).expose_secret()).to_wide();
-        let z1 = *(alpha + (p * e).to_wide()).expose_secret();
-        let z2 = *(beta + (q * e).to_wide()).expose_secret();
-        let omega1 = *(x + mu * e_wide).expose_secret();
-        let omega2 = *(nu * e_wide + &y).expose_secret();
-        let v = *(r + (hat_sigma * e_wide.to_wide())).expose_secret();
+        let hat_sigma = sigma - (p_wide * &nu).to_public().to_wide();
+        let z1 = (alpha + (p * e).to_wide()).to_public();
+        let z2 = (beta + (q * e).to_wide()).to_public();
+        let omega1 = (x + mu * e_wide).to_public();
+        let omega2 = (nu * e_wide + y).to_public();
+        let v = (r + (hat_sigma * e_wide.to_wide())).to_public();
 
         Self {
             e,
@@ -135,11 +126,11 @@ impl<P: SchemeParams> FacProof<P> {
             cap_b,
             cap_t,
             sigma,
-            z1: z1.into(),
-            z2: z2.into(),
-            omega1: omega1.into(),
-            omega2: omega2.into(),
-            v: v.into(),
+            z1,
+            z2,
+            omega1,
+            omega2,
+            v,
         }
     }
 

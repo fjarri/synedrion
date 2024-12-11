@@ -15,8 +15,8 @@ use crate::{
         Secret,
     },
     uint::{
-        subtle::ConditionallySelectable, Encoding, NonZero, PublicSigned, SecretSigned, U1024Mod, U2048Mod, U4096Mod,
-        U512Mod, Uint, Zero, U1024, U2048, U4096, U512, U8192,
+        subtle::ConditionallySelectable, Encoding, NonZero, PublicSigned, SecretBounded, SecretSigned, U1024Mod,
+        U2048Mod, U4096Mod, U512Mod, Uint, Zero, U1024, U2048, U4096, U512, U8192,
     },
 };
 
@@ -231,27 +231,38 @@ pub(crate) fn secret_uint_from_scalar<P: SchemeParams>(
     Secret::init_with(|| <P::Paillier as PaillierParams>::Uint::from_be_bytes(*repr.expose_secret()))
 }
 
+pub(crate) fn secret_bounded_from_scalar<P: SchemeParams>(
+    value: &Secret<Scalar>,
+) -> SecretBounded<<P::Paillier as PaillierParams>::Uint> {
+    SecretBounded::new(
+        *secret_uint_from_scalar::<P>(value).expose_secret(),
+        ORDER.bits_vartime() as u32,
+    )
+    .expect(concat![
+        "a curve scalar value is smaller than the curve order, ",
+        "and the curve order fits in `PaillierParams::Uint`"
+    ])
+}
+
 pub(crate) fn secret_signed_from_scalar<P: SchemeParams>(
     value: &Secret<Scalar>,
-) -> Secret<SecretSigned<<P::Paillier as PaillierParams>::Uint>> {
-    Secret::init_with(|| {
-        SecretSigned::new_positive(
-            *secret_uint_from_scalar::<P>(value).expose_secret(),
-            ORDER.bits_vartime() as u32,
-        )
-        .expect(concat![
-            "a curve scalar value is smaller than the curve order, ",
-            "and the curve order fits in `PaillierParams::Uint`"
-        ])
-    })
+) -> SecretSigned<<P::Paillier as PaillierParams>::Uint> {
+    SecretSigned::new_positive(
+        *secret_uint_from_scalar::<P>(value).expose_secret(),
+        ORDER.bits_vartime() as u32,
+    )
+    .expect(concat![
+        "a curve scalar value is smaller than the curve order, ",
+        "and the curve order fits in `PaillierParams::Uint`"
+    ])
 }
 
 pub(crate) fn secret_scalar_from_signed<P: SchemeParams>(
-    value: &Secret<SecretSigned<<P::Paillier as PaillierParams>::Uint>>,
+    value: &SecretSigned<<P::Paillier as PaillierParams>::Uint>,
 ) -> Secret<Scalar> {
     // TODO: wrap in secrets properly
-    let abs_value = scalar_from_uint::<P>(&value.expose_secret().abs());
-    Secret::init_with(|| Scalar::conditional_select(&abs_value, &-abs_value, value.expose_secret().is_negative()))
+    let abs_value = scalar_from_uint::<P>(value.abs().expose_secret());
+    Secret::init_with(|| Scalar::conditional_select(&abs_value, &-abs_value, value.is_negative()))
 }
 
 impl<P: SchemeParams> HashableType for P {
