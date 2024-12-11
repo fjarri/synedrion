@@ -1,6 +1,6 @@
 use core::{
     fmt::Debug,
-    ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Rem, RemAssign, Sub, SubAssign},
+    ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Rem, RemAssign, Sub, SubAssign},
 };
 
 use crypto_bigint::{
@@ -137,15 +137,6 @@ impl<T: Zeroize + for<'a> AddAssign<&'a T>> Add<Secret<T>> for &Secret<T> {
         let mut result = other;
         result += self;
         result
-    }
-}
-
-// Negation
-
-impl<T: Zeroize + Clone + Neg<Output = T>> Neg for &Secret<T> {
-    type Output = Secret<T>;
-    fn neg(self) -> Self::Output {
-        Secret::init_with(|| self.expose_secret().clone().neg())
     }
 }
 
