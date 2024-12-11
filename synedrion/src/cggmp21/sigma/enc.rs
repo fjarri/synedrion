@@ -136,7 +136,7 @@ impl<P: SchemeParams> EncProof<P> {
         // s^{z_1} t^{z_3} == C S^e \mod \hat{N}
         let cap_c = self.cap_c.to_precomputed(setup);
         let cap_s = self.cap_s.to_precomputed(setup);
-        if setup.commit_public(&self.z1, &self.z3) != &cap_c * &cap_s.pow_signed_vartime(&e) {
+        if setup.commit(&self.z1, &self.z3) != &cap_c * &cap_s.pow(&e) {
             return false;
         }
 

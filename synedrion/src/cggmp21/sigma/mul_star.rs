@@ -169,7 +169,7 @@ impl<P: SchemeParams> MulStarProof<P> {
         // s^{z_1} t^{z_2} == E S^e
         let cap_e = self.cap_e.to_precomputed(setup);
         let cap_s = self.cap_s.to_precomputed(setup);
-        if setup.commit_public(&self.z1, &self.z2) != &cap_e * &cap_s.pow_signed_vartime(&e) {
+        if setup.commit(&self.z1, &self.z2) != &cap_e * &cap_s.pow(&e) {
             return false;
         }
 

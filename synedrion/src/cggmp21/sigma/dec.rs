@@ -157,7 +157,7 @@ impl<P: SchemeParams> DecProof<P> {
         // s^{z_1} t^{z_2} == T S^e
         let cap_s = self.cap_s.to_precomputed(setup);
         let cap_t = self.cap_t.to_precomputed(setup);
-        if setup.commit_public_wide(&self.z1, &self.z2) != &cap_t * &cap_s.pow_signed_vartime(&e) {
+        if setup.commit(&self.z1, &self.z2) != &cap_t * &cap_s.pow(&e) {
             return false;
         }
 

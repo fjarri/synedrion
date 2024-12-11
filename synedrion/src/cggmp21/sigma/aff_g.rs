@@ -247,14 +247,14 @@ impl<P: SchemeParams> AffGProof<P> {
         // s^{z_1} t^{z_3} = E S^e \mod \hat{N}
         let cap_e = self.cap_e.to_precomputed(setup);
         let cap_s = self.cap_s.to_precomputed(setup);
-        if setup.commit_public(&self.z1, &self.z3) != &cap_e * &cap_s.pow_signed_vartime(&e) {
+        if setup.commit(&self.z1, &self.z3) != &cap_e * &cap_s.pow(&e) {
             return false;
         }
 
         // s^{z_2} t^{z_4} = F T^e \mod \hat{N}
         let cap_f = self.cap_f.to_precomputed(setup);
         let cap_t = self.cap_t.to_precomputed(setup);
-        if setup.commit_public(&self.z2, &self.z4) != &cap_f * &cap_t.pow_signed_vartime(&e) {
+        if setup.commit(&self.z2, &self.z4) != &cap_f * &cap_t.pow(&e) {
             return false;
         }
 

@@ -86,9 +86,9 @@ impl<P: SchemeParams> FacProof<P> {
 
         let cap_p = setup.commit(&p, &mu).to_wire();
         let cap_q = setup.commit(&q, &nu);
-        let cap_a = setup.commit_wide(&alpha, &x).to_wire();
-        let cap_b = setup.commit_wide(&beta, &y).to_wire();
-        let cap_t = (&cap_q.pow_signed_wide(&alpha) * &setup.commit_zero_xwide(&r)).to_wire();
+        let cap_a = setup.commit(&alpha, &x).to_wire();
+        let cap_b = setup.commit(&beta, &y).to_wire();
+        let cap_t = (&cap_q.pow(&alpha) * &setup.commit_zero(&r)).to_wire();
         let cap_q = cap_q.to_wire();
 
         let mut reader = XofHasher::new_with_dst(HASH_TAG)
@@ -162,27 +162,25 @@ impl<P: SchemeParams> FacProof<P> {
         }
 
         // R = s^{N_0} t^\sigma
-        let cap_r = &setup.commit_public_xwide(&pk0.modulus_bounded(), &self.sigma);
+        let cap_r = &setup.commit(&pk0.modulus_bounded(), &self.sigma);
 
         // s^{z_1} t^{\omega_1} == A * P^e \mod \hat{N}
         let cap_a = self.cap_a.to_precomputed(setup);
         let cap_p = self.cap_p.to_precomputed(setup);
-        if setup.commit_public_wide(&self.z1, &self.omega1) != &cap_a * &cap_p.pow_signed_vartime(&e) {
+        if setup.commit(&self.z1, &self.omega1) != &cap_a * &cap_p.pow(&e) {
             return false;
         }
 
         // s^{z_2} t^{\omega_2} == B * Q^e \mod \hat{N}
         let cap_b = self.cap_b.to_precomputed(setup);
         let cap_q = self.cap_q.to_precomputed(setup);
-        if setup.commit_public_wide(&self.z2, &self.omega2) != &cap_b * &cap_q.pow_signed_vartime(&e) {
+        if setup.commit(&self.z2, &self.omega2) != &cap_b * &cap_q.pow(&e) {
             return false;
         }
 
         // Q^{z_1} * t^v == T * R^e \mod \hat{N}
         let cap_t = self.cap_t.to_precomputed(setup);
-        if &cap_q.pow_signed_wide_vartime(&self.z1) * &setup.commit_public_base_xwide(&self.v)
-            != &cap_t * &cap_r.pow_signed_vartime(&e)
-        {
+        if &cap_q.pow(&self.z1) * &setup.commit_zero(&self.v) != &cap_t * &cap_r.pow(&e) {
             return false;
         }
 

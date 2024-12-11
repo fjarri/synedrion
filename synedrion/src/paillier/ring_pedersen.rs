@@ -11,7 +11,7 @@ use super::{
 };
 use crate::{
     tools::Secret,
-    uint::{Exponentiable, PublicBounded, PublicSigned, Retrieve, SecretBounded, SecretSigned, ToMontgomery},
+    uint::{Exponentiable, Retrieve, SecretBounded, ToMontgomery},
 };
 
 /// Ring-Pedersen secret.
@@ -102,53 +102,18 @@ impl<P: PaillierParams> RPParams<P> {
     }
 
     /// Creates a commitment for a secret `value` with a secret `randomizer`.
-    pub fn commit(&self, value: &SecretSigned<P::Uint>, randomizer: &SecretSigned<P::WideUint>) -> RPCommitment<P> {
-        RPCommitment(self.base_value.pow(value) * self.base_randomizer.pow(randomizer))
-    }
-
-    /// Creates a commitment for a secret `value` with a secret `randomizer`.
-    pub fn commit_wide(
-        &self,
-        value: &SecretSigned<P::WideUint>,
-        randomizer: &SecretSigned<P::WideUint>,
-    ) -> RPCommitment<P> {
+    pub fn commit<V, R>(&self, value: &V, randomizer: &R) -> RPCommitment<P>
+    where
+        P::UintMod: Exponentiable<V> + Exponentiable<R>,
+    {
         RPCommitment(self.base_value.pow(value) * self.base_randomizer.pow(randomizer))
     }
 
     /// Creates a commitment for a secret `randomizer` and the value 0.
-    pub fn commit_zero_xwide(&self, randomizer: &SecretSigned<P::ExtraWideUint>) -> RPCommitment<P> {
-        RPCommitment(self.base_randomizer.pow(randomizer))
-    }
-
-    /// Creates a commitment for a public `value` with a public `randomizer`.
-    pub fn commit_public(
-        &self,
-        value: &PublicSigned<P::Uint>,
-        randomizer: &PublicSigned<P::WideUint>,
-    ) -> RPCommitment<P> {
-        RPCommitment(self.base_value.pow(value) * self.base_randomizer.pow(randomizer))
-    }
-
-    /// Creates a commitment for a public `value` with a public `randomizer`.
-    pub fn commit_public_wide(
-        &self,
-        value: &PublicSigned<P::WideUint>,
-        randomizer: &PublicSigned<P::WideUint>,
-    ) -> RPCommitment<P> {
-        RPCommitment(self.base_value.pow(value) * self.base_randomizer.pow(randomizer))
-    }
-
-    /// Creates a commitment for a public `value` with a public `randomizer`.
-    pub fn commit_public_xwide(
-        &self,
-        value: &PublicBounded<P::Uint>,
-        randomizer: &PublicSigned<P::ExtraWideUint>,
-    ) -> RPCommitment<P> {
-        RPCommitment(self.base_value.pow(value) * self.base_randomizer.pow(randomizer))
-    }
-
-    /// Creates a commitment for a public `randomizer` and the value 0.
-    pub fn commit_public_base_xwide(&self, randomizer: &PublicSigned<P::ExtraWideUint>) -> RPCommitment<P> {
+    pub fn commit_zero<R>(&self, randomizer: &R) -> RPCommitment<P>
+    where
+        P::UintMod: Exponentiable<R>,
+    {
         RPCommitment(self.base_randomizer.pow(randomizer))
     }
 
@@ -197,21 +162,10 @@ impl<P: PaillierParams> RPCommitment<P> {
     }
 
     /// Raise to the power of `exponent`.
-    ///
-    /// Note: this is variable time in `exponent`.
-    pub fn pow_signed_vartime(&self, exponent: &PublicSigned<P::Uint>) -> Self {
-        Self(self.0.pow(exponent))
-    }
-
-    /// Raise to the power of `exponent`.
-    ///
-    /// Note: this is variable time in `exponent`.
-    pub fn pow_signed_wide_vartime(&self, exponent: &PublicSigned<P::WideUint>) -> Self {
-        Self(self.0.pow(exponent))
-    }
-
-    /// Raise to the power of `exponent`.
-    pub fn pow_signed_wide(&self, exponent: &SecretSigned<P::WideUint>) -> Self {
+    pub fn pow<V>(&self, exponent: &V) -> Self
+    where
+        P::UintMod: Exponentiable<V>,
+    {
         Self(self.0.pow(exponent))
     }
 }
