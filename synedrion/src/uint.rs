@@ -4,12 +4,6 @@ mod secret_bounded;
 mod secret_signed;
 mod traits;
 
-pub(crate) use crypto_bigint::{
-    modular::Retrieve, subtle, CheckedAdd, CheckedSub, Encoding, Integer, Invert, NonZero, PowBoundedExp, RandomMod,
-    ShlVartime, Uint, WrappingSub, Zero, U1024, U2048, U4096, U512, U8192,
-};
-pub(crate) use crypto_primes::RandomPrimeWithRng;
-
 pub(crate) use public_bounded::PublicBounded;
 pub(crate) use public_signed::PublicSigned;
 pub(crate) use secret_bounded::SecretBounded;

@@ -1,6 +1,6 @@
-use crypto_bigint::Bounded;
+use crypto_bigint::{Bounded, Integer};
 
-use super::{HasWide, Integer};
+use super::HasWide;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) struct PublicBounded<T> {

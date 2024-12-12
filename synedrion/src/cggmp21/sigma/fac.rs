@@ -1,5 +1,6 @@
 //! No small factor proof ($\Pi^{fac}$, Section C.5, Fig. 28)
 
+use crypto_bigint::Integer;
 use rand_core::CryptoRngCore;
 use serde::{Deserialize, Serialize};
 
@@ -7,7 +8,7 @@ use super::super::SchemeParams;
 use crate::{
     paillier::{PaillierParams, PublicKeyPaillier, RPCommitmentWire, RPParams, SecretKeyPaillier},
     tools::hashing::{Chain, Hashable, XofHasher},
-    uint::{HasWide, Integer, PublicSigned, SecretSigned},
+    uint::{HasWide, PublicSigned, SecretSigned},
 };
 
 const HASH_TAG: &[u8] = b"P_fac";
@@ -66,13 +67,12 @@ impl<P: SchemeParams> FacProof<P> {
         // N_0 \hat{N}
         let scale = pk0.modulus().mul_wide(hat_cap_n);
 
-        let sigma = PublicSigned::from(
-            SecretSigned::<<P::Paillier as PaillierParams>::Uint>::random_bounded_bits_scaled_wide(
-                rng,
-                P::L_BOUND,
-                &scale,
-            ),
-        );
+        let sigma = SecretSigned::<<P::Paillier as PaillierParams>::Uint>::random_bounded_bits_scaled_wide(
+            rng,
+            P::L_BOUND,
+            &scale,
+        )
+        .to_public();
         let r = SecretSigned::<<P::Paillier as PaillierParams>::Uint>::random_bounded_bits_scaled_wide(
             rng,
             P::L_BOUND + P::EPS_BOUND,

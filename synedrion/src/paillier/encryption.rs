@@ -3,7 +3,11 @@ use core::{
     ops::{Add, Mul},
 };
 
-use crypto_bigint::{subtle::ConstantTimeGreater, Monty, ShrVartime};
+use crypto_bigint::{
+    modular::Retrieve,
+    subtle::{Choice, ConditionallyNegatable, ConstantTimeGreater},
+    Monty, ShrVartime,
+};
 use rand_core::CryptoRngCore;
 use serde::{Deserialize, Serialize};
 
@@ -13,10 +17,7 @@ use super::{
 };
 use crate::{
     tools::Secret,
-    uint::{
-        subtle::{Choice, ConditionallyNegatable},
-        Exponentiable, HasWide, PublicSigned, Retrieve, SecretBounded, SecretSigned, ToMontgomery,
-    },
+    uint::{Exponentiable, HasWide, PublicSigned, SecretBounded, SecretSigned, ToMontgomery},
 };
 
 /// A public randomizer-like quantity used in ZK proofs.
@@ -435,7 +436,9 @@ impl<'a, P: PaillierParams> Mul<&'a SecretBounded<P::Uint>> for &Ciphertext<P> {
 
 #[cfg(test)]
 mod tests {
-    use crypto_bigint::{Encoding, Integer, ShrVartime, WrappingSub};
+    use crypto_bigint::{
+        subtle::ConditionallySelectable, Encoding, Integer, NonZero, RandomMod, ShrVartime, WrappingSub,
+    };
     use rand_core::OsRng;
     use zeroize::Zeroize;
 
@@ -443,7 +446,7 @@ mod tests {
         super::{params::PaillierTest, PaillierParams, SecretKeyPaillierWire},
         Ciphertext, Randomizer,
     };
-    use crate::uint::{subtle::ConditionallySelectable, HasWide, NonZero, RandomMod, SecretBounded, SecretSigned};
+    use crate::uint::{HasWide, SecretBounded, SecretSigned};
 
     fn mul_mod<T>(lhs: &T, rhs: &SecretSigned<T>, modulus: &NonZero<T>) -> T
     where

@@ -3,7 +3,12 @@ use core::{
     ops::{AddAssign, SubAssign},
 };
 
-use crypto_bigint::{InvMod, Monty, Odd, ShrVartime, Square, WrappingAdd};
+use crypto_bigint::{
+    modular::Retrieve,
+    subtle::{Choice, ConditionallySelectable},
+    CheckedAdd, CheckedSub, Integer, InvMod, Invert, Monty, NonZero, Odd, PowBoundedExp, ShrVartime, Square,
+    WrappingAdd,
+};
 use rand_core::CryptoRngCore;
 use serde::{Deserialize, Serialize};
 
@@ -13,11 +18,7 @@ use super::{
 };
 use crate::{
     tools::Secret,
-    uint::{
-        subtle::{Choice, ConditionallySelectable},
-        CheckedAdd, CheckedSub, HasWide, Integer, Invert, NonZero, PowBoundedExp, PublicBounded, Retrieve,
-        SecretBounded, SecretSigned, ToMontgomery,
-    },
+    uint::{HasWide, PublicBounded, SecretBounded, SecretSigned, ToMontgomery},
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

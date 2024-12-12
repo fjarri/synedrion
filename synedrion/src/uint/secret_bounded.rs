@@ -1,4 +1,6 @@
-use crypto_bigint::{Bounded, Integer, Monty, NonZero};
+use core::ops::BitAnd;
+
+use crypto_bigint::{subtle::Choice, Bounded, Integer, Monty, NonZero};
 use zeroize::Zeroize;
 
 use super::{HasWide, SecretSigned};
@@ -16,6 +18,10 @@ impl<T> SecretBounded<T>
 where
     T: Zeroize + Integer + Bounded,
 {
+    pub fn is_zero(&self) -> Choice {
+        self.value.expose_secret().is_zero()
+    }
+
     pub fn bound(&self) -> u32 {
         self.bound
     }
@@ -54,6 +60,23 @@ where
 
     pub fn expose_secret(&self) -> &T {
         self.value.expose_secret()
+    }
+}
+
+impl<T> BitAnd<T> for SecretBounded<T>
+where
+    T: Zeroize + Bounded + Integer,
+{
+    type Output = Self;
+    fn bitand(self, rhs: T) -> Self::Output {
+        Self {
+            value: Secret::init_with(|| {
+                let mut result = self.value.expose_secret().clone();
+                result &= rhs;
+                result
+            }),
+            bound: self.bound,
+        }
     }
 }
 

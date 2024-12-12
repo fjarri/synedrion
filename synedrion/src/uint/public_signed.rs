@@ -1,13 +1,12 @@
 use alloc::{boxed::Box, format, string::String};
 use core::ops::{Mul, Neg, Sub};
 
-use crypto_bigint::Bounded;
+use crypto_bigint::{Bounded, Encoding, Integer, NonZero};
 use digest::XofReader;
 use serde::{Deserialize, Serialize};
 use serde_encoded_bytes::{Hex, SliceLike};
-use zeroize::Zeroize;
 
-use super::{Encoding, HasWide, Integer, NonZero};
+use super::HasWide;
 use crate::tools::hashing::uint_from_xof;
 
 /// A packed representation for serializing Signed objects.
@@ -65,7 +64,7 @@ where
 /// A wrapper over unsigned integers that treats two's complement numbers as negative.
 // In principle, Bounded could be separate from Signed, but we only use it internally,
 // and pretty much every time we need a bounded value, it's also signed.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Zeroize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(
     try_from = "PackedSigned",
     into = "PackedSigned",
@@ -73,17 +72,8 @@ where
 )]
 pub(crate) struct PublicSigned<T> {
     /// bound on the bit size of the absolute value
-    pub(crate) bound: u32,
-    pub(crate) value: T,
-}
-
-impl<T> From<SecretSigned<T>> for PublicSigned<T> {
-    fn from(source: SecretSigned<T>) -> Self {
-        Self {
-            value: source.value,
-            bound: source.bound,
-        }
-    }
+    bound: u32,
+    value: T,
 }
 
 impl<T> PublicSigned<T>
@@ -130,6 +120,10 @@ where
 
     pub fn bound(&self) -> u32 {
         self.bound
+    }
+
+    pub fn value(&self) -> &T {
+        &self.value
     }
 
     /// Returns `true` if the value is within `[-2^bound_bits, 2^bound_bits]`.
@@ -212,8 +206,6 @@ where
     }
 }
 
-use super::SecretSigned;
-
 impl<T> Neg for PublicSigned<T>
 where
     T: Integer + Bounded,
@@ -222,17 +214,6 @@ where
 
     fn neg(self) -> Self::Output {
         PublicSigned::neg(&self)
-    }
-}
-
-impl<T> Neg for &PublicSigned<T>
-where
-    T: Integer + Bounded,
-{
-    type Output = PublicSigned<T>;
-
-    fn neg(self) -> Self::Output {
-        PublicSigned::neg(self)
     }
 }
 
