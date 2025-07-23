@@ -200,6 +200,7 @@ impl<P: SchemeParams> ModProof<P> {
 mod tests {
     use manul::{dev::BinaryFormat, session::WireFormat};
     use rand_core::OsRng;
+    use serde::Deserialize;
 
     use super::ModProof;
     use crate::{dev::TestParams, paillier::SecretKeyPaillierWire, params::SchemeParams};
@@ -218,7 +219,7 @@ mod tests {
 
         // Serialization roundtrip
         let serialized = BinaryFormat::serialize(proof).unwrap();
-        let proof = BinaryFormat::deserialize::<ModProof<Params>>(&serialized).unwrap();
+        let proof = ModProof::<Params>::deserialize(BinaryFormat::deserializer(&serialized)).unwrap();
 
         assert!(proof.verify(pk, &aux));
     }

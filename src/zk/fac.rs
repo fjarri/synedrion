@@ -211,6 +211,7 @@ impl<P: SchemeParams> FacProof<P> {
 mod tests {
     use manul::{dev::BinaryFormat, session::WireFormat};
     use rand_core::OsRng;
+    use serde::Deserialize;
 
     use super::FacProof;
     use crate::{
@@ -235,7 +236,7 @@ mod tests {
 
         // Serialization roundtrip
         let serialized = BinaryFormat::serialize(proof).unwrap();
-        let proof = BinaryFormat::deserialize::<FacProof<Params>>(&serialized).unwrap();
+        let proof = FacProof::<Params>::deserialize(BinaryFormat::deserializer(&serialized)).unwrap();
 
         assert!(proof.verify(pk, &setup, &aux));
     }

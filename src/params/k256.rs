@@ -1,4 +1,4 @@
-//! Scheme parametes for Secp256k1 curve (as implemented by [`k256']).
+//! Scheme parametes for Secp256k1 curve (as implemented by [`k256`]).
 
 use core::fmt::Debug;
 

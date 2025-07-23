@@ -132,6 +132,7 @@ impl<P: SchemeParams> PrmProof<P> {
 mod tests {
     use manul::{dev::BinaryFormat, session::WireFormat};
     use rand_core::OsRng;
+    use serde::Deserialize;
 
     use super::PrmProof;
     use crate::{
@@ -152,7 +153,7 @@ mod tests {
 
         // Serialization roundtrip
         let serialized = BinaryFormat::serialize(proof).unwrap();
-        let proof = BinaryFormat::deserialize::<PrmProof<Params>>(&serialized).unwrap();
+        let proof = PrmProof::<Params>::deserialize(BinaryFormat::deserializer(&serialized)).unwrap();
 
         assert!(proof.verify(&setup, &aux));
     }

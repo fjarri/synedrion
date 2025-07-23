@@ -194,6 +194,7 @@ impl<P: SchemeParams> EncElgProof<P> {
 mod tests {
     use manul::{dev::BinaryFormat, session::WireFormat};
     use rand_core::OsRng;
+    use serde::Deserialize;
 
     use super::{EncElgProof, EncElgPublicInputs, EncElgSecretInputs};
     use crate::{
@@ -244,7 +245,7 @@ mod tests {
 
         // Serialization roundtrip
         let serialized = BinaryFormat::serialize(proof).unwrap();
-        let proof = BinaryFormat::deserialize::<EncElgProof<Params>>(&serialized).unwrap();
+        let proof = EncElgProof::<Params>::deserialize(BinaryFormat::deserializer(&serialized)).unwrap();
 
         assert!(proof.verify(public, &setup, &aux));
     }

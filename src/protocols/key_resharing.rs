@@ -9,19 +9,20 @@
 //! since the CGGMP paper itself does not contain any threshold functionality.
 
 use alloc::{
-    boxed::Box,
     collections::{BTreeMap, BTreeSet},
-    format,
+    string::String,
     vec::Vec,
 };
 use core::{fmt::Debug, marker::PhantomData};
 
 use ecdsa::VerifyingKey;
-use manul::protocol::{
-    Artifact, BoxedFormat, BoxedRound, CommunicationInfo, DirectMessage, EchoBroadcast, EchoRoundParticipation,
-    EntryPoint, FinalizeOutcome, LocalError, MessageValidationError, NormalBroadcast, PartyId, Payload, Protocol,
-    ProtocolError, ProtocolMessage, ProtocolMessagePart, ProtocolValidationError, ReceiveError, RequiredMessages,
-    Round, RoundId, TransitionInfo,
+use manul::{
+    protocol::{
+        BoxedRound, CommunicationInfo, EchoRoundParticipation, EntryPoint, EvidenceError, EvidenceMessages,
+        FinalizeOutcome, LocalError, NoMessage, PartyId, Protocol, ProtocolError, ProtocolMessage, ReceiveError,
+        RequiredMessageParts, RequiredMessages, Round, RoundId, RoundInfo, TransitionInfo,
+    },
+    utils::{GetOrLocalError, Without},
 };
 use rand_core::CryptoRngCore;
 use serde::{Deserialize, Serialize};
@@ -32,71 +33,67 @@ use crate::{
     params::SchemeParams,
     tools::{
         Secret,
-        protocol_shortcuts::{DowncastMap, Without},
         sss::{Polynomial, PublicPolynomial, ShareId, interpolation_coeff, shamir_join_points, shamir_join_scalars},
     },
 };
 
 /// A protocol for modifying the set of owners of a shared secret key.
 #[derive(Debug)]
-pub struct KeyResharingProtocol<P: SchemeParams, I: Debug>(PhantomData<(P, I)>);
+pub struct KeyResharingProtocol<P: SchemeParams, Id: Debug>(PhantomData<(P, Id)>);
 
-impl<P: SchemeParams, I: PartyId> Protocol<I> for KeyResharingProtocol<P, I> {
-    type Result = Option<ThresholdKeyShare<P, I>>;
-    type ProtocolError = KeyResharingError;
-
-    fn verify_direct_message_is_invalid(
-        _format: &BoxedFormat,
-        _round_id: &RoundId,
-        _message: &DirectMessage,
-    ) -> Result<(), MessageValidationError> {
-        unimplemented!()
-    }
-
-    fn verify_echo_broadcast_is_invalid(
-        _format: &BoxedFormat,
-        _round_id: &RoundId,
-        _message: &EchoBroadcast,
-    ) -> Result<(), MessageValidationError> {
-        unimplemented!()
-    }
-
-    fn verify_normal_broadcast_is_invalid(
-        _format: &BoxedFormat,
-        _round_id: &RoundId,
-        _message: &NormalBroadcast,
-    ) -> Result<(), MessageValidationError> {
-        unimplemented!()
+impl<P: SchemeParams, Id: PartyId> Protocol<Id> for KeyResharingProtocol<P, Id> {
+    type Result = Option<ThresholdKeyShare<P, Id>>;
+    type SharedData = ();
+    fn round_info(round_id: &RoundId) -> Option<RoundInfo<Id, Self>> {
+        match round_id {
+            _ if round_id == 1 => Some(RoundInfo::new::<Round1<P, Id>>()),
+            _ => None,
+        }
     }
 }
 
-/// Provable faults of KeyResharing
-#[derive(displaydoc::Display, Debug, Clone, Copy, Serialize, Deserialize)]
-pub enum KeyResharingError {
-    /// Unexpected sender of a message (not one of the old holders)
-    UnexpectedSender,
-    /// Mismatch of the subshare
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub(super) struct R1Error<P> {
+    error: R1ErrorEnum,
+    phantom: PhantomData<fn() -> P>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+enum R1ErrorEnum {
     SubshareMismatch,
 }
 
-impl<I> ProtocolError<I> for KeyResharingError {
-    type AssociatedData = ();
+impl<P: SchemeParams, Id: PartyId> ProtocolError<Id> for R1Error<P> {
+    type Round = Round1<P, Id>;
 
-    fn required_messages(&self) -> RequiredMessages {
-        unimplemented!()
+    fn description(&self) -> String {
+        match self.error {
+            R1ErrorEnum::SubshareMismatch => "Mismatch of the subshare",
+        }
+        .into()
     }
 
-    fn verify_messages_constitute_error(
+    fn required_messages(&self, _round_id: &RoundId) -> RequiredMessages {
+        match self.error {
+            R1ErrorEnum::SubshareMismatch => {
+                RequiredMessages::new(RequiredMessageParts::echo_broadcast().and_direct_message(), None, None)
+            }
+        }
+    }
+
+    fn verify_evidence(
         &self,
-        _format: &BoxedFormat,
-        _guilty_party: &I,
+        _round_id: &RoundId,
+        _guilty_party: &Id,
         _shared_randomness: &[u8],
-        _associated_data: &Self::AssociatedData,
-        _message: ProtocolMessage,
-        _previous_messages: BTreeMap<RoundId, ProtocolMessage>,
-        _combined_echos: BTreeMap<RoundId, BTreeMap<I, EchoBroadcast>>,
-    ) -> Result<(), ProtocolValidationError> {
-        unimplemented!()
+        _shared_data: &<<Self::Round as Round<Id>>::Protocol as Protocol<Id>>::SharedData,
+        _messages: EvidenceMessages<'_, Id, Self::Round>,
+    ) -> Result<(), EvidenceError> {
+        match &self.error {
+            R1ErrorEnum::SubshareMismatch => {
+                todo!()
+            }
+        }
     }
 }
 
@@ -165,7 +162,7 @@ where
 
     fn make_round(
         self,
-        rng: &mut dyn CryptoRngCore,
+        rng: &mut impl CryptoRngCore,
         _shared_randomness: &[u8],
         id: &I,
     ) -> Result<BoxedRound<I, Self::Protocol>, LocalError> {
@@ -225,7 +222,7 @@ where
 
         let new_holder = self.new_holder.map(|new_holder| NewHolderData { inputs: new_holder });
 
-        Ok(BoxedRound::new_dynamic(Round1 {
+        Ok(BoxedRound::new(Round1 {
             old_holder,
             new_holder,
             new_share_ids,
@@ -252,7 +249,7 @@ struct NewHolderData<P: SchemeParams, I: PartyId> {
 }
 
 #[derive(Debug)]
-struct Round1<P: SchemeParams, I: PartyId> {
+pub(super) struct Round1<P: SchemeParams, I: PartyId> {
     old_holder: Option<OldHolderData<P>>,
     new_holder: Option<NewHolderData<P, I>>,
     new_share_ids: BTreeMap<I, ShareId<P>>,
@@ -266,17 +263,18 @@ struct Round1<P: SchemeParams, I: PartyId> {
 
 #[derive(Debug, Clone)]
 #[derive_where::derive_where(Serialize, Deserialize)]
-struct Round1BroadcastMessage<P: SchemeParams> {
+pub(super) struct Round1BroadcastMessage<P: SchemeParams> {
     public_polynomial: PublicPolynomial<P>,
     old_share_id: ShareId<P>,
 }
 
 #[derive(Debug, Clone)]
 #[derive_where::derive_where(Serialize, Deserialize)]
-struct Round1DirectMessage<P: SchemeParams> {
+pub(super) struct Round1DirectMessage<P: SchemeParams> {
     subshare: Secret<Scalar<P>>,
 }
-struct Round1Payload<P: SchemeParams> {
+
+pub(super) struct Round1Payload<P: SchemeParams> {
     subshare: Secret<Scalar<P>>,
     public_polynomial: PublicPolynomial<P>,
     old_share_id: ShareId<P>,
@@ -284,6 +282,15 @@ struct Round1Payload<P: SchemeParams> {
 
 impl<P: SchemeParams, I: PartyId> Round<I> for Round1<P, I> {
     type Protocol = KeyResharingProtocol<P, I>;
+
+    type DirectMessage = Round1DirectMessage<P>;
+    type NormalBroadcast = NoMessage;
+    type EchoBroadcast = Round1BroadcastMessage<P>;
+
+    type Payload = Round1Payload<P>;
+    type Artifact = ();
+
+    type ProtocolError = R1Error<P>;
 
     fn transition_info(&self) -> TransitionInfo {
         TransitionInfo::new_linear_terminating(1)
@@ -297,85 +304,73 @@ impl<P: SchemeParams, I: PartyId> Round<I> for Round1<P, I> {
         }
     }
 
-    fn make_echo_broadcast(
-        &self,
-        _rng: &mut dyn CryptoRngCore,
-        format: &BoxedFormat,
-    ) -> Result<EchoBroadcast, LocalError> {
+    fn make_echo_broadcast(&self, _rng: &mut impl CryptoRngCore) -> Result<Self::EchoBroadcast, LocalError> {
         if let Some(old_holder) = self.old_holder.as_ref() {
-            EchoBroadcast::new(
-                format,
-                Round1BroadcastMessage {
-                    public_polynomial: old_holder.public_polynomial.clone(),
-                    old_share_id: old_holder.share_id,
-                },
-            )
+            Ok(Round1BroadcastMessage {
+                public_polynomial: old_holder.public_polynomial.clone(),
+                old_share_id: old_holder.share_id,
+            })
         } else {
-            Ok(EchoBroadcast::none())
+            Err(LocalError::new("This node does not send messages"))
         }
     }
 
     fn make_direct_message(
         &self,
-        _rng: &mut dyn CryptoRngCore,
-        format: &BoxedFormat,
+        _rng: &mut impl CryptoRngCore,
         destination: &I,
-    ) -> Result<(DirectMessage, Option<Artifact>), LocalError> {
+    ) -> Result<(Self::DirectMessage, Self::Artifact), LocalError> {
         if let Some(old_holder) = self.old_holder.as_ref() {
-            let their_share_id = self.new_share_ids.get(destination).ok_or(LocalError::new(format!(
-                "destination={destination:?} is missing from the new_share_ids",
-            )))?;
+            let their_share_id = self.new_share_ids.get_or_local_error("new holders", destination)?;
 
             let subshare: Secret<Scalar<P>> = old_holder.polynomial.evaluate(their_share_id);
-            let dm = DirectMessage::new(format, Round1DirectMessage { subshare })?;
-            Ok((dm, None))
+            Ok((Round1DirectMessage { subshare }, ()))
         } else {
-            Ok((DirectMessage::none(), None))
+            Err(LocalError::new("This node does not send messages"))
         }
     }
 
     fn receive_message(
         &self,
-        format: &BoxedFormat,
         from: &I,
-        message: ProtocolMessage,
-    ) -> Result<Payload, ReceiveError<I, Self::Protocol>> {
-        message.normal_broadcast.assert_is_none()?;
-        let echo_broadcast = message
-            .echo_broadcast
-            .deserialize::<Round1BroadcastMessage<P>>(format)?;
-        let direct_message = message.direct_message.deserialize::<Round1DirectMessage<P>>(format)?;
+        message: ProtocolMessage<I, Self>,
+    ) -> Result<Self::Payload, ReceiveError<I, Self>> {
+        let echo_broadcast = message.echo_broadcast;
+        let direct_message = message.direct_message;
 
         if let Some(new_holder) = self.new_holder.as_ref() {
             if new_holder.inputs.old_holders.contains(from) {
-                let my_share_id = self.new_share_ids.get(&self.my_id).ok_or(LocalError::new(format!(
-                    "my_id={:?} is missing from the new_share_ids",
-                    &self.my_id
-                )))?;
+                let my_share_id = self.new_share_ids.get_or_local_error("new holders", &self.my_id)?;
                 let public_subshare_from_poly = echo_broadcast.public_polynomial.evaluate(my_share_id);
                 let public_subshare_from_private = Secret::mul_by_generator(&direct_message.subshare);
 
                 // Check that the public polynomial sent in the broadcast corresponds to the secret share
                 // sent in the direct message.
                 if public_subshare_from_poly != public_subshare_from_private {
-                    return Err(ReceiveError::protocol(KeyResharingError::SubshareMismatch));
+                    return Err(ReceiveError::Protocol(R1Error {
+                        error: R1ErrorEnum::SubshareMismatch,
+                        phantom: PhantomData,
+                    }));
                 }
 
-                return Ok(Payload::new(Round1Payload {
+                return Ok(Round1Payload {
                     subshare: direct_message.subshare,
                     public_polynomial: echo_broadcast.public_polynomial,
                     old_share_id: echo_broadcast.old_share_id,
-                }));
+                });
             }
         }
-        Err(ReceiveError::protocol(KeyResharingError::UnexpectedSender))
+        // If this node is an old holder, it has reported that it does not expect any messages
+        // (in `communication_info()`).
+        // So if `manul` works correctly, the execution should not reach this point.
+        Err(LocalError::new("This node is an old holder and does not receive any messages").into())
     }
 
     fn finalize(
-        self: Box<Self>,
-        _rng: &mut dyn CryptoRngCore,
-        payloads: BTreeMap<I, Payload>,
-        _artifacts: BTreeMap<I, Artifact>,
+        self,
+        _rng: &mut impl CryptoRngCore,
+        payloads: BTreeMap<I, Self::Payload>,
+        _artifacts: BTreeMap<I, Self::Artifact>,
     ) -> Result<FinalizeOutcome<I, Self::Protocol>, LocalError> {
         // If this party is not a new holder, exit.
         let new_holder = match self.new_holder.as_ref() {
@@ -383,12 +378,9 @@ impl<P: SchemeParams, I: PartyId> Round<I> for Round1<P, I> {
             None => return Ok(FinalizeOutcome::Result(None)),
         };
 
-        let mut payloads = payloads.downcast_all::<Round1Payload<P>>()?;
+        let mut payloads = payloads;
 
-        let share_id = self
-            .new_share_ids
-            .get(&self.my_id)
-            .ok_or_else(|| LocalError::new(format!("my_id={:?} is missing from new_share_ids", &self.my_id)))?;
+        let share_id = self.new_share_ids.get_or_local_error("new holders", &self.my_id)?;
 
         // If this node is both an old and a new holder,
         // add a simulated payload to the mapping, as if it sent a message to itself.
@@ -434,9 +426,7 @@ impl<P: SchemeParams, I: PartyId> Round<I> for Round1<P, I> {
             .old_holders
             .iter()
             .map(|id| {
-                let payload = payloads
-                    .get(id)
-                    .ok_or_else(|| LocalError::new("id={id:?} is missing from the payloads"))?;
+                let payload = payloads.get_or_local_error("payloads", id)?;
                 Ok((payload.old_share_id, payload.subshare.clone()))
             })
             .collect::<Result<BTreeMap<_, _>, _>>()?;

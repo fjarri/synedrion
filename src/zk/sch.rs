@@ -86,6 +86,7 @@ impl<P: SchemeParams> SchProof<P> {
 mod tests {
     use manul::{dev::BinaryFormat, session::WireFormat};
     use rand_core::OsRng;
+    use serde::Deserialize;
 
     use super::{SchCommitment, SchProof, SchSecret};
     use crate::{curve::Scalar, dev::TestParams, tools::Secret};
@@ -104,7 +105,7 @@ mod tests {
 
         // Serialization roundtrip
         let serialized = BinaryFormat::serialize(proof).unwrap();
-        let proof = BinaryFormat::deserialize::<SchProof<Params>>(&serialized).unwrap();
+        let proof = SchProof::<Params>::deserialize(BinaryFormat::deserializer(&serialized)).unwrap();
 
         assert!(proof.verify(&commitment, &public, &aux));
     }

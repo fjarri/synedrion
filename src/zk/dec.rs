@@ -271,6 +271,7 @@ impl<P: SchemeParams> DecProof<P> {
 mod tests {
     use manul::{dev::BinaryFormat, session::WireFormat};
     use rand_core::OsRng;
+    use serde::Deserialize;
 
     use super::{DecProof, DecPublicInputs, DecSecretInputs};
     use crate::{
@@ -335,7 +336,7 @@ mod tests {
 
         // Serialization roundtrip
         let serialized = BinaryFormat::serialize(proof).unwrap();
-        let proof = BinaryFormat::deserialize::<DecProof<Params>>(&serialized).unwrap();
+        let proof = DecProof::<Params>::deserialize(BinaryFormat::deserializer(&serialized)).unwrap();
 
         assert!(proof.verify(public, &setup, &aux));
     }

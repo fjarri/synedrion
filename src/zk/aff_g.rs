@@ -256,6 +256,7 @@ impl<P: SchemeParams> AffGProof<P> {
 mod tests {
     use manul::{dev::BinaryFormat, session::WireFormat};
     use rand_core::OsRng;
+    use serde::Deserialize;
 
     use super::{AffGProof, AffGPublicInputs, AffGSecretInputs};
     use crate::{
@@ -311,7 +312,7 @@ mod tests {
 
         // Serialization roundtrip
         let serialized = BinaryFormat::serialize(proof).unwrap();
-        let proof = BinaryFormat::deserialize::<AffGProof<Params>>(&serialized).unwrap();
+        let proof = AffGProof::<Params>::deserialize(BinaryFormat::deserializer(&serialized)).unwrap();
 
         assert!(proof.verify(public, &rp_params, &aux));
     }

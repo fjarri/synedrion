@@ -54,9 +54,9 @@ pub use entities::{AuxInfo, KeyShare, KeyShareChange, ThresholdKeyShare};
 pub use paillier::PaillierParams;
 pub use params::SchemeParams;
 pub use protocols::{
-    AuxGen, AuxGenAssociatedData, AuxGenProtocol, InteractiveSigning, InteractiveSigningAssociatedData,
-    InteractiveSigningProtocol, KeyInit, KeyInitAssociatedData, KeyInitProtocol, KeyRefresh, KeyRefreshAssociatedData,
-    KeyRefreshProtocol, KeyResharing, KeyResharingProtocol, NewHolder, OldHolder, PrehashedMessage,
+    AuxGen, AuxGenProtocol, AuxGenSharedData, InteractiveSigning, InteractiveSigningProtocol,
+    InteractiveSigningSharedData, KeyInit, KeyInitProtocol, KeyInitSharedData, KeyRefresh, KeyRefreshProtocol,
+    KeyRefreshSharedData, KeyResharing, KeyResharingProtocol, NewHolder, OldHolder, PrehashedMessage,
 };
 pub use uint::{BoxedEncoding, Extendable, MulWide};
 
