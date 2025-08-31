@@ -2,10 +2,10 @@ use alloc::vec::Vec;
 
 use bip32::{ChainCode, DerivationPath, PrivateKeyBytes, PublicKey as _};
 use digest::Digest;
-use ecdsa::{hazmat::DigestPrimitive, VerifyingKey};
+use ecdsa::{VerifyingKey, hazmat::DigestPrimitive};
 use elliptic_curve::{
-    sec1::{FromEncodedPoint, ModulusSize, ToEncodedPoint},
     Curve, CurveArithmetic, PrimeCurve,
+    sec1::{FromEncodedPoint, ModulusSize, ToEncodedPoint},
 };
 
 /// Used for deriving child keys from a parent type.

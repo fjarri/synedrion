@@ -30,14 +30,14 @@ use crate::{
     curve::{Point, RecoverableSignature, Scalar},
     entities::{AuxInfo, AuxInfoPrecomputed, KeyShare, PublicAuxInfoPrecomputed, PublicAuxInfos, PublicKeyShares},
     paillier::{Ciphertext, CiphertextWire, PaillierParams, Randomizer},
-    params::{chain_scheme_params, secret_scalar_from_signed, secret_signed_from_scalar, SchemeParams},
+    params::{SchemeParams, chain_scheme_params, secret_scalar_from_signed, secret_signed_from_scalar},
     tools::{
+        Secret,
         hashing::{Chain, HashOutput, Hasher},
         protocol_shortcuts::{
-            sum_non_empty, sum_non_empty_ref, verify_that, DeserializeAll, DowncastMap, GetRound, MapValues, SafeGet,
-            Without,
+            DeserializeAll, DowncastMap, GetRound, MapValues, SafeGet, Without, sum_non_empty, sum_non_empty_ref,
+            verify_that,
         },
-        Secret,
     },
     uint::SecretSigned,
     zk::{
@@ -2424,21 +2424,23 @@ impl<P: SchemeParams, Id: PartyId> Round<Id> for Round6<P, Id> {
                 &aux,
             );
 
-            assert!(hat_psi.verify(
-                AffGStarPublicInputs {
-                    pk0: &self.context.public_aux(id)?.paillier_pk,
-                    pk1: pk,
-                    cap_c: self.cap_ks.safe_get("``K` map", id)?,
-                    cap_d: self
-                        .hat_cap_ds
-                        .safe_get("`\\hat{D}` map", &(id.clone(), my_id.clone()))?,
-                    cap_y: self
-                        .hat_cap_fs
-                        .safe_get("`\\hat{F}` map", &(id.clone(), my_id.clone()))?,
-                    cap_x: cap_xs.safe_get("`X` map", &my_id)?,
-                },
-                &aux,
-            ));
+            assert!(
+                hat_psi.verify(
+                    AffGStarPublicInputs {
+                        pk0: &self.context.public_aux(id)?.paillier_pk,
+                        pk1: pk,
+                        cap_c: self.cap_ks.safe_get("``K` map", id)?,
+                        cap_d: self
+                            .hat_cap_ds
+                            .safe_get("`\\hat{D}` map", &(id.clone(), my_id.clone()))?,
+                        cap_y: self
+                            .hat_cap_fs
+                            .safe_get("`\\hat{F}` map", &(id.clone(), my_id.clone()))?,
+                        cap_x: cap_xs.safe_get("`X` map", &my_id)?,
+                    },
+                    &aux,
+                )
+            );
 
             hat_psis.insert(id.clone(), hat_psi);
         }
@@ -2547,19 +2549,19 @@ impl<P: SchemeParams, Id: PartyId> Round<Id> for Round6<P, Id> {
 mod tests {
     use alloc::collections::BTreeSet;
 
-    use ecdsa::{signature::hazmat::PrehashVerifier, VerifyingKey};
+    use ecdsa::{VerifyingKey, signature::hazmat::PrehashVerifier};
     use elliptic_curve::FieldBytes;
     use manul::{
-        dev::{run_sync, BinaryFormat, TestSessionParams, TestSigner, TestVerifier},
+        dev::{BinaryFormat, TestSessionParams, TestSigner, TestVerifier, run_sync},
         signature::Keypair,
     };
     use rand_core::{OsRng, RngCore};
 
     use super::InteractiveSigning;
     use crate::{
+        SchemeParams,
         dev::TestParams,
         entities::{AuxInfo, KeyShare},
-        SchemeParams,
     };
     type Curve = <TestParams as SchemeParams>::Curve;
 

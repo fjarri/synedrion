@@ -6,8 +6,8 @@ use crate::{
     curve::{Point, Scalar},
     params::SchemeParams,
     tools::{
-        hashing::{Chain, Hashable, Hasher},
         Secret,
+        hashing::{Chain, Hashable, Hasher},
     },
 };
 

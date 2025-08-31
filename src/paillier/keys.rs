@@ -1,10 +1,10 @@
 use core::fmt::Debug;
 
 use crypto_bigint::{
-    modular::Retrieve,
-    subtle::{Choice, ConditionallySelectable},
     CheckedAdd, CheckedSub, Integer, InvMod, Invert, Monty, NonZero, Odd, PowBoundedExp, ShrVartime, Square,
     WrappingAdd,
+    modular::Retrieve,
+    subtle::{Choice, ConditionallySelectable},
 };
 use digest::XofReader;
 use rand_core::CryptoRngCore;

@@ -1,11 +1,11 @@
 use core::ops::{Add, Mul, Neg, Not, Sub};
 
 use crypto_bigint::{
+    Bounded, CheckedAdd, CheckedMul, CheckedSub, Integer, NonZero, RandomMod, WrappingAdd, WrappingMul, WrappingNeg,
+    WrappingSub,
     rand_core::CryptoRngCore,
     subtle::{Choice, ConditionallySelectable, ConstantTimeLess, CtOption},
     zeroize::Zeroize,
-    Bounded, CheckedAdd, CheckedMul, CheckedSub, Integer, NonZero, RandomMod, WrappingAdd, WrappingMul, WrappingNeg,
-    WrappingSub,
 };
 
 use super::{Extendable, MulWide, PublicSigned, SecretUnsigned};
@@ -544,8 +544,8 @@ mod tests {
     use std::ops::Neg;
 
     use crypto_bigint::{
+        Bounded, CheckedMul, CheckedSub, Integer, U128, U1024, U2048,
         subtle::{Choice, ConditionallySelectable},
-        Bounded, CheckedMul, CheckedSub, Integer, U1024, U128, U2048,
     };
     use rand::SeedableRng;
     use rand_chacha::{self, ChaCha8Rng};

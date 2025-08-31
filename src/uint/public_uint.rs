@@ -1,6 +1,6 @@
 use alloc::boxed::Box;
 
-use serde::{de::Error, Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error};
 use serde_encoded_bytes::{Hex, SliceLike};
 
 use super::BoxedEncoding;

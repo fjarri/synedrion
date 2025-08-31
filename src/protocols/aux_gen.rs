@@ -31,7 +31,7 @@ use crate::{
     tools::{
         bitvec::BitVec,
         hashing::{Chain, HashOutput, Hasher},
-        protocol_shortcuts::{verify_that, DeserializeAll, DowncastMap, GetRound, MapValues, SafeGet, Without},
+        protocol_shortcuts::{DeserializeAll, DowncastMap, GetRound, MapValues, SafeGet, Without, verify_that},
     },
     zk::{FacProof, ModProof, PrmProof},
 };
@@ -738,7 +738,7 @@ mod tests {
     use alloc::collections::BTreeSet;
 
     use manul::{
-        dev::{run_sync, BinaryFormat, TestSessionParams, TestSigner, TestVerifier},
+        dev::{BinaryFormat, TestSessionParams, TestSigner, TestVerifier, run_sync},
         signature::Keypair,
     };
     use rand_core::OsRng;

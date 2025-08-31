@@ -1,8 +1,8 @@
 use core::ops::BitAnd;
 
 use crypto_bigint::{
-    subtle::{Choice, CtOption},
     Bounded, Integer, Monty, NonZero,
+    subtle::{Choice, CtOption},
 };
 use zeroize::Zeroize;
 

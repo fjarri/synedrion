@@ -4,9 +4,9 @@ use core::{
 };
 
 use crypto_bigint::{
+    Integer, Invert, Monty,
     modular::Retrieve,
     subtle::{Choice, ConditionallyNegatable},
-    Integer, Invert, Monty,
 };
 use rand_core::CryptoRngCore;
 use serde::{Deserialize, Serialize};
@@ -368,7 +368,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crypto_bigint::{subtle::ConditionallySelectable, AddMod, Bounded, Integer, NonZero};
+    use crypto_bigint::{AddMod, Bounded, Integer, NonZero, subtle::ConditionallySelectable};
     use rand_core::OsRng;
     use zeroize::Zeroize;
 

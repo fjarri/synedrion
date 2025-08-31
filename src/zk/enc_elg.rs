@@ -8,10 +8,10 @@ use crate::{
         Ciphertext, CiphertextWire, MaskedRandomizer, PaillierParams, PublicKeyPaillier, RPCommitmentWire, RPParams,
         Randomizer,
     },
-    params::{public_signed_from_scalar, scalar_from_signed, secret_scalar_from_signed, SchemeParams},
+    params::{SchemeParams, public_signed_from_scalar, scalar_from_signed, secret_scalar_from_signed},
     tools::{
-        hashing::{Chain, Hashable, Hasher},
         Secret,
+        hashing::{Chain, Hashable, Hasher},
     },
     uint::{PublicSigned, SecretSigned},
 };
@@ -200,7 +200,7 @@ mod tests {
         curve::Scalar,
         dev::TestParams,
         paillier::{Ciphertext, RPParams, Randomizer, SecretKeyPaillierWire},
-        params::{secret_scalar_from_signed, SchemeParams},
+        params::{SchemeParams, secret_scalar_from_signed},
         tools::Secret,
         uint::SecretSigned,
     };

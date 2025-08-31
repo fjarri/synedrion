@@ -2,8 +2,8 @@
 name = "synedrion"
 authors = ['Entropy Cryptography <engineering@entropy.xyz>']
 version = "0.4.0-dev"
-edition = "2021"
-rust-version = "1.83"
+edition = "2024"
+rust-version = "1.85"
 license = "AGPL-3.0-or-later"
 description = "Threshold signing library based on Canetti-Gennaro-Goldfeder-Makriyannis-Peled '24 scheme"
 repository = "https://github.com/entropyxyz/synedrion"

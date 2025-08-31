@@ -25,10 +25,10 @@ use crate::{
     entities::{KeyShare, Sid},
     params::SchemeParams,
     tools::{
+        Secret,
         bitvec::BitVec,
         hashing::{Chain, HashOutput, Hasher},
-        protocol_shortcuts::{verify_that, DeserializeAll, DowncastMap, GetRound, MapValues, SafeGet, Without},
-        Secret,
+        protocol_shortcuts::{DeserializeAll, DowncastMap, GetRound, MapValues, SafeGet, Without, verify_that},
     },
     zk::{SchCommitment, SchProof, SchSecret},
 };
@@ -569,7 +569,7 @@ mod tests {
     use alloc::collections::BTreeSet;
 
     use manul::{
-        dev::{run_sync, BinaryFormat, TestSessionParams, TestSigner, TestVerifier},
+        dev::{BinaryFormat, TestSessionParams, TestSigner, TestVerifier, run_sync},
         signature::Keypair,
     };
     use rand_core::OsRng;

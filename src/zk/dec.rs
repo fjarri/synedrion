@@ -9,8 +9,8 @@ use crate::{
     curve::Point,
     paillier::{Ciphertext, CiphertextWire, MaskedRandomizer, PaillierParams, PublicKeyPaillier, RPParams, Randomizer},
     params::{
-        scalar_from_signed, scalar_from_wide_signed, secret_scalar_from_signed, secret_scalar_from_wide_signed,
-        SchemeParams,
+        SchemeParams, scalar_from_signed, scalar_from_wide_signed, secret_scalar_from_signed,
+        secret_scalar_from_wide_signed,
     },
     tools::{
         bitvec::BitVec,
@@ -277,7 +277,7 @@ mod tests {
         curve::Scalar,
         dev::TestParams,
         paillier::{Ciphertext, PaillierParams, RPParams, Randomizer, SecretKeyPaillierWire},
-        params::{secret_scalar_from_signed, SchemeParams},
+        params::{SchemeParams, secret_scalar_from_signed},
         uint::SecretSigned,
     };
 

@@ -31,9 +31,9 @@ use crate::{
     entities::ThresholdKeyShare,
     params::SchemeParams,
     tools::{
-        protocol_shortcuts::{DowncastMap, Without},
-        sss::{interpolation_coeff, shamir_join_points, shamir_join_scalars, Polynomial, PublicPolynomial, ShareId},
         Secret,
+        protocol_shortcuts::{DowncastMap, Without},
+        sss::{Polynomial, PublicPolynomial, ShareId, interpolation_coeff, shamir_join_points, shamir_join_scalars},
     },
 };
 
@@ -471,7 +471,7 @@ mod tests {
     use alloc::collections::{BTreeMap, BTreeSet};
 
     use manul::{
-        dev::{run_sync, BinaryFormat, TestSessionParams, TestSigner, TestVerifier},
+        dev::{BinaryFormat, TestSessionParams, TestSigner, TestVerifier, run_sync},
         signature::Keypair,
     };
     use rand_core::OsRng;

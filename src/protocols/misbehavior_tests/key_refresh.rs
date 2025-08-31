@@ -22,9 +22,9 @@ use crate::{
     paillier::{PaillierParams, PublicKeyPaillierWire, RPParams, RPParamsWire, RPSecret, SecretKeyPaillierWire},
     params::SchemeParams,
     tools::{
-        hashing::Hasher,
-        protocol_shortcuts_dev::{check_evidence_with_behavior, check_invalid_message_evidence, CheckPart},
         Secret,
+        hashing::Hasher,
+        protocol_shortcuts_dev::{CheckPart, check_evidence_with_behavior, check_invalid_message_evidence},
     },
     zk::{FacProof, ModProof, PrmProof, SchCommitment, SchProof, SchSecret},
 };

@@ -5,12 +5,12 @@ use core::{
 };
 
 use crypto_bigint::{
+    Integer, Monty, NonZero, WrappingAdd, WrappingMul, WrappingNeg, WrappingSub,
     modular::Retrieve,
     subtle::{Choice, ConditionallyNegatable, ConditionallySelectable},
-    Integer, Monty, NonZero, WrappingAdd, WrappingMul, WrappingNeg, WrappingSub,
 };
 use secrecy::{ExposeSecret, ExposeSecretMut, SecretBox};
-use serde::{de::Error, Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error};
 use serde_encoded_bytes::{Hex, SliceLike};
 use zeroize::Zeroize;
 

@@ -6,7 +6,7 @@ use crate::{
     curve::Scalar,
     k256::ProductionParams112,
     paillier::{Ciphertext, PaillierParams, RPParams, RPSecret, Randomizer, SecretKeyPaillier, SecretKeyPaillierWire},
-    params::{secret_scalar_from_signed, SchemeParams},
+    params::{SchemeParams, secret_scalar_from_signed},
     tools::Secret,
     uint::SecretSigned,
     zk::{

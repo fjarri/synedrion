@@ -1,7 +1,8 @@
 use crypto_bigint::{BitOps, CheckedSub, Integer, Monty, NonZero, Odd, RandomMod, Square};
 use crypto_primes::{
+    RandomPrimeWithRng,
     hazmat::{SetBits, SmallPrimesSieveFactory},
-    is_prime_with_rng, sieve_and_find, RandomPrimeWithRng,
+    is_prime_with_rng, sieve_and_find,
 };
 use digest::XofReader;
 use rand_core::CryptoRngCore;

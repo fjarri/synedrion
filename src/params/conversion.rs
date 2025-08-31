@@ -1,5 +1,5 @@
 use crypto_bigint::{BitOps, NonZero, Zero};
-use elliptic_curve::{bigint::Encoding, Curve, CurveArithmetic, PrimeField};
+use elliptic_curve::{Curve, CurveArithmetic, PrimeField, bigint::Encoding};
 use secrecy::{ExposeSecret, ExposeSecretMut, SecretBox};
 
 use super::traits::SchemeParams;
@@ -80,22 +80,14 @@ pub(crate) fn scalar_from_signed<P: SchemeParams>(
     value: &PublicSigned<<P::Paillier as PaillierParams>::Uint>,
 ) -> Scalar<P> {
     let abs_value = scalar_from_wide_uint::<P>(&value.abs().to_wide());
-    if value.is_negative() {
-        -abs_value
-    } else {
-        abs_value
-    }
+    if value.is_negative() { -abs_value } else { abs_value }
 }
 
 pub(crate) fn scalar_from_wide_signed<P: SchemeParams>(
     value: &PublicSigned<<P::Paillier as PaillierParams>::WideUint>,
 ) -> Scalar<P> {
     let abs_value = scalar_from_wide_uint::<P>(&value.abs());
-    if value.is_negative() {
-        -abs_value
-    } else {
-        abs_value
-    }
+    if value.is_negative() { -abs_value } else { abs_value }
 }
 
 /// Converts a secret-wrapped uint to a secret-wrapped [`Scalar`], reducing the value modulo curve order.

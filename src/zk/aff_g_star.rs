@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     curve::Point,
     paillier::{Ciphertext, CiphertextWire, MaskedRandomizer, PaillierParams, PublicKeyPaillier, Randomizer},
-    params::{scalar_from_signed, secret_scalar_from_signed, SchemeParams},
+    params::{SchemeParams, scalar_from_signed, secret_scalar_from_signed},
     tools::{
         bitvec::BitVec,
         hashing::{Chain, Hashable, Hasher},
@@ -267,7 +267,7 @@ mod tests {
     use crate::{
         dev::TestParams,
         paillier::{Ciphertext, Randomizer, SecretKeyPaillierWire},
-        params::{secret_scalar_from_signed, SchemeParams},
+        params::{SchemeParams, secret_scalar_from_signed},
         uint::SecretSigned,
     };
 

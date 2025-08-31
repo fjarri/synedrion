@@ -6,7 +6,7 @@ use core::fmt::Debug;
 // and `k256` depends on the released one.
 // So as long as that is the case, `k256` `Uint` is separate
 // from the one used throughout the crate.
-use crypto_bigint::{nlimbs, Uint};
+use crypto_bigint::{Uint, nlimbs};
 use serde::{Deserialize, Serialize};
 use sha3::Shake256;
 

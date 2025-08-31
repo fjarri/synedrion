@@ -16,13 +16,13 @@ use crate::{
     curve::{Point, Scalar},
     params::SchemeParams,
     tools::{
-        sss::{interpolation_coeff, shamir_evaluation_points, shamir_join_points, shamir_split, ShareId},
         Secret,
+        sss::{ShareId, interpolation_coeff, shamir_evaluation_points, shamir_join_points, shamir_split},
     },
 };
 
 #[cfg(feature = "bip32")]
-use crate::curve::{apply_tweaks_public, derive_tweaks, DeriveChildKey, PublicTweakable, SecretTweakable};
+use crate::curve::{DeriveChildKey, PublicTweakable, SecretTweakable, apply_tweaks_public, derive_tweaks};
 
 /// A threshold variant of the key share, where any `threshold` shares our of the total number
 /// is enough to perform signing.

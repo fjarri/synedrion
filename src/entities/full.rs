@@ -10,7 +10,7 @@ use manul::{protocol::PartyId, session::LocalError, utils::SerializableMap};
 use rand_core::CryptoRngCore;
 
 use crate::{
-    curve::{secret_split, Point, Scalar},
+    curve::{Point, Scalar, secret_split},
     paillier::{
         PublicKeyPaillier, PublicKeyPaillierWire, RPParams, RPParamsWire, SecretKeyPaillier, SecretKeyPaillierWire,
     },
@@ -382,7 +382,7 @@ mod tests {
     use rand_core::OsRng;
 
     use super::KeyShare;
-    use crate::{dev::TestParams, SchemeParams};
+    use crate::{SchemeParams, dev::TestParams};
 
     #[test]
     fn key_share_centralized() {
@@ -397,8 +397,10 @@ mod tests {
             &ids,
             Some(&sk),
         );
-        assert!(shares
-            .values()
-            .all(|share| &share.verifying_key() == sk.verifying_key()));
+        assert!(
+            shares
+                .values()
+                .all(|share| &share.verifying_key() == sk.verifying_key())
+        );
     }
 }

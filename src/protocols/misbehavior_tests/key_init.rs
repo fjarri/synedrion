@@ -13,9 +13,9 @@ use crate::{
     curve::Scalar,
     dev::TestParams,
     tools::{
-        bitvec::BitVec,
-        protocol_shortcuts_dev::{check_evidence_with_behavior, check_invalid_message_evidence, CheckPart},
         Secret,
+        bitvec::BitVec,
+        protocol_shortcuts_dev::{CheckPart, check_evidence_with_behavior, check_invalid_message_evidence},
     },
     zk::SchProof,
 };

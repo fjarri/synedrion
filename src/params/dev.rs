@@ -1,6 +1,6 @@
 //! Parameters intended for testing, scaled down to small curve orders and integer sizes.
 
-use crypto_bigint::{nlimbs, Uint};
+use crypto_bigint::{Uint, nlimbs};
 use serde::{Deserialize, Serialize};
 use sha3::Shake256;
 use tiny_curve::TinyCurve32;

@@ -5,7 +5,7 @@
 
 use alloc::vec::Vec;
 
-use crypto_bigint::{modular::Retrieve, BitOps, Integer, PowBoundedExp};
+use crypto_bigint::{BitOps, Integer, PowBoundedExp, modular::Retrieve};
 use rand_core::CryptoRngCore;
 use serde::{Deserialize, Serialize};
 

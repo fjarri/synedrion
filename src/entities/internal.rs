@@ -4,7 +4,7 @@ use manul::protocol::PartyId;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    params::{chain_scheme_params, SchemeParams},
+    params::{SchemeParams, chain_scheme_params},
     tools::hashing::{Chain, HashOutput, Hasher},
 };
 

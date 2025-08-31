@@ -5,11 +5,11 @@ use rand::Rng;
 use rand_core::CryptoRngCore;
 
 use crate::{
+    Extendable, MulWide, SchemeParams,
     k256::{PaillierProduction112, ProductionParams112},
     paillier::{PaillierParams, RPParams, SecretKeyPaillier, SecretKeyPaillierWire},
     tools::Secret,
     uint::{PublicSigned, SecretSigned},
-    Extendable, MulWide, SchemeParams,
 };
 
 type Pai = PaillierProduction112;

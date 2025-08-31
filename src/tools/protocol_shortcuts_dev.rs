@@ -3,8 +3,8 @@ use core::{fmt::Debug, marker::PhantomData};
 
 use manul::{
     combinators::misbehave::{Behavior, Misbehaving, MisbehavingEntryPoint},
-    dev::run_sync,
     dev::ExecutionResult,
+    dev::run_sync,
     protocol::{
         Artifact, BoxedFormat, BoxedRound, DirectMessage, EchoBroadcast, EntryPoint, NormalBroadcast, PartyId,
         Protocol, ProtocolError, ProtocolMessagePart,

@@ -1,13 +1,13 @@
 /// Implements the Definition 3.3 from the CGGMP'21 paper and related operations.
 use core::ops::Mul;
 
-use crypto_bigint::{modular::Retrieve, Integer, Monty, NonZero, RandomMod, ShrVartime};
+use crypto_bigint::{Integer, Monty, NonZero, RandomMod, ShrVartime, modular::Retrieve};
 use rand_core::CryptoRngCore;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    rsa::{PublicModulus, PublicModulusWire, SecretPrimes, SecretPrimesWire},
     PaillierParams,
+    rsa::{PublicModulus, PublicModulusWire, SecretPrimes, SecretPrimesWire},
 };
 use crate::{
     tools::Secret,

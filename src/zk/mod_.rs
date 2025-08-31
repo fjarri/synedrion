@@ -5,7 +5,7 @@
 
 use alloc::vec::Vec;
 
-use crypto_bigint::{modular::Retrieve, Gcd, Integer, Square};
+use crypto_bigint::{Gcd, Integer, Square, modular::Retrieve};
 use crypto_primes::RandomPrimeWithRng;
 use digest::XofReader;
 use rand::SeedableRng;
