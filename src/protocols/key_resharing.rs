@@ -43,13 +43,24 @@ pub struct KeyResharingProtocol<P: SchemeParams, Id: Debug>(PhantomData<(P, Id)>
 
 impl<P: SchemeParams, Id: PartyId> Protocol<Id> for KeyResharingProtocol<P, Id> {
     type Result = Option<ThresholdKeyShare<P, Id>>;
-    type SharedData = ();
+    type SharedData = KeyResharingSharedData<P, Id>;
     fn round_info(round_id: &RoundId) -> Option<RoundInfo<Id, Self>> {
         match round_id {
             _ if round_id == 1 => Some(RoundInfo::new::<Round1<P, Id>>()),
             _ => None,
         }
     }
+}
+
+pub struct KeyResharingSharedData<P, Id> {
+    /// Public shares of all participating nodes.
+    pub old_shares: PublicKeyShares<P, Id>,
+    /// The old threshold.
+    pub old_threshold: usize,
+    /// The new holders of the shares.
+    new_holders: BTreeSet<I>,
+    /// The new threshold.
+    new_threshold: usize,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -86,12 +97,23 @@ impl<P: SchemeParams, Id: PartyId> ProtocolError<Id> for R1Error<P> {
         _round_id: &RoundId,
         _guilty_party: &Id,
         _shared_randomness: &[u8],
-        _shared_data: &<<Self::Round as Round<Id>>::Protocol as Protocol<Id>>::SharedData,
-        _messages: EvidenceMessages<'_, Id, Self::Round>,
+        shared_data: &<<Self::Round as Round<Id>>::Protocol as Protocol<Id>>::SharedData,
+        messages: EvidenceMessages<'_, Id, Self::Round>,
     ) -> Result<(), EvidenceError> {
         match &self.error {
             R1ErrorEnum::SubshareMismatch => {
-                todo!()
+                let r1_eb = messages.echo_broadcast()?;
+                let r1_dm = messages.direct_message()?;
+
+                if shared_data.old_holders.contains(from) {
+                    let my_share_id = self.new_share_ids.get_or_invalid_evidence("new holders", &self.my_id)?;
+                    let public_subshare_from_poly = r1_eb.public_polynomial.evaluate(my_share_id);
+                    let public_subshare_from_private = Secret::mul_by_generator(&r1_dm.subshare);
+
+                    // Check that the public polynomial sent in the broadcast corresponds to the secret share
+                    // sent in the direct message.
+                    verify_that(public_subshare_from_poly != public_subshare_from_private)
+                }
             }
         }
     }
