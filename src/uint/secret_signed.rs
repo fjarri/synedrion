@@ -300,7 +300,7 @@ where
     /// sampling from $[-2^{exp-1}+1, 2^{exp-1}]$ (See Section 3, Groups & Fields).
     ///
     /// Note: variable time in `exp`.
-    pub fn random_in_exponent_range(rng: &mut dyn CryptoRngCore, exp: u32) -> Self {
+    pub fn random_in_exponent_range(rng: &mut impl CryptoRngCore, exp: u32) -> Self {
         assert!(exp > 0, "`exp` must be greater than zero");
         assert!(
             exp < T::BITS,
@@ -336,7 +336,7 @@ where
     /// sampling from $[-scale (2^{exp-1}+1), scale 2^{exp-1}]$ (See Section 3, Groups & Fields).
     ///
     /// Note: variable time in `exp` and bit size of `scale`.
-    pub fn random_in_exponent_range_scaled<W>(rng: &mut dyn CryptoRngCore, exp: u32, scale: &T) -> SecretSigned<W>
+    pub fn random_in_exponent_range_scaled<W>(rng: &mut impl CryptoRngCore, exp: u32, scale: &T) -> SecretSigned<W>
     where
         T: Extendable<W>,
         W: Zeroize + Integer + Bounded + ConditionallySelectable + RandomMod,
@@ -380,7 +380,7 @@ where
     ///
     /// Note: variable time in `exp` and bit size of `scale`.
     pub fn random_in_exponent_range_scaled_wide<W, XW>(
-        rng: &mut dyn CryptoRngCore,
+        rng: &mut impl CryptoRngCore,
         exp: u32,
         scale: &W,
     ) -> SecretSigned<XW>

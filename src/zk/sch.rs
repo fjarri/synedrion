@@ -24,7 +24,7 @@ pub(crate) struct SchSecret<P: SchemeParams>(
 );
 
 impl<P: SchemeParams> SchSecret<P> {
-    pub fn random(rng: &mut dyn CryptoRngCore) -> Self {
+    pub fn random(rng: &mut impl CryptoRngCore) -> Self {
         Self(Secret::init_with(|| Scalar::random(rng)))
     }
 }

@@ -7,9 +7,6 @@ use rand_core::CryptoRngCore;
 use super::arithmetic::{Point, Scalar};
 use crate::SchemeParams;
 
-#[cfg(test)]
-use crate::tools::BoxedRng;
-
 /// A wrapper for a signature and public key recovery info.
 #[derive(Debug, Clone)]
 pub struct RecoverableSignature<P: SchemeParams> {
@@ -22,8 +19,8 @@ where
     P: SchemeParams,
 {
     #[cfg(test)]
-    pub(crate) fn random(rng: &mut dyn CryptoRngCore) -> Option<Self> {
-        let sk = ecdsa::SigningKey::random(&mut BoxedRng(rng));
+    pub(crate) fn random(rng: &mut impl CryptoRngCore) -> Option<Self> {
+        let sk = ecdsa::SigningKey::random(rng);
         let (signature, recovery_id) = sk.sign_recoverable(b"test message").ok()?;
         Some(Self { signature, recovery_id })
     }
