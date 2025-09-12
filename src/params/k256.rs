@@ -1,4 +1,4 @@
-//! Scheme parametes for Secp256k1 curve (as implemented by [`k256']).
+//! Scheme parametes for Secp256k1 curve (as implemented by [`k256`]).
 
 use core::fmt::Debug;
 
@@ -6,7 +6,7 @@ use core::fmt::Debug;
 // and `k256` depends on the released one.
 // So as long as that is the case, `k256` `Uint` is separate
 // from the one used throughout the crate.
-use crypto_bigint::{nlimbs, Uint};
+use crypto_bigint::{Uint, nlimbs};
 use serde::{Deserialize, Serialize};
 use sha3::Shake256;
 

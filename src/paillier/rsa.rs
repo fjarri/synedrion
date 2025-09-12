@@ -1,7 +1,8 @@
 use crypto_bigint::{BitOps, CheckedSub, Integer, Monty, NonZero, Odd, RandomMod, Square};
 use crypto_primes::{
+    RandomPrimeWithRng,
     hazmat::{SetBits, SmallPrimesSieveFactory},
-    is_prime_with_rng, sieve_and_find, RandomPrimeWithRng,
+    is_prime_with_rng, sieve_and_find,
 };
 use digest::XofReader;
 use rand_core::CryptoRngCore;
@@ -17,7 +18,7 @@ use crate::{
 };
 
 #[cfg(test)]
-fn random_small_paillier_blum_prime<P: PaillierParams>(rng: &mut dyn CryptoRngCore) -> P::HalfUint {
+fn random_small_paillier_blum_prime<P: PaillierParams>(rng: &mut impl CryptoRngCore) -> P::HalfUint {
     loop {
         let sieve = SmallPrimesSieveFactory::<P::HalfUint>::new(P::PRIME_BITS - 2, SetBits::TwoMsb);
         let prime: <P as PaillierParams>::HalfUint =
@@ -28,7 +29,7 @@ fn random_small_paillier_blum_prime<P: PaillierParams>(rng: &mut dyn CryptoRngCo
     }
 }
 
-fn random_paillier_blum_prime<P: PaillierParams>(rng: &mut dyn CryptoRngCore) -> P::HalfUint {
+fn random_paillier_blum_prime<P: PaillierParams>(rng: &mut impl CryptoRngCore) -> P::HalfUint {
     loop {
         let sieve = SmallPrimesSieveFactory::<P::HalfUint>::new(P::PRIME_BITS, SetBits::TwoMsb);
         let prime: <P as PaillierParams>::HalfUint =
@@ -66,7 +67,7 @@ impl<P: PaillierParams> SecretPrimesWire<P> {
 
     /// Creates smaller than required primes to trigger an error during tests.
     #[cfg(test)]
-    pub fn random_small_paillier_blum(rng: &mut dyn CryptoRngCore) -> Self {
+    pub fn random_small_paillier_blum(rng: &mut impl CryptoRngCore) -> Self {
         Self::new(
             Secret::init_with(|| random_small_paillier_blum_prime::<P>(rng)),
             Secret::init_with(|| random_small_paillier_blum_prime::<P>(rng)),
@@ -75,7 +76,7 @@ impl<P: PaillierParams> SecretPrimesWire<P> {
 
     /// Creates the primes for a Paillier-Blum modulus,
     /// that is `p` and `q` are regular primes with an additional condition `p, q mod 3 = 4`.
-    pub fn random_paillier_blum(rng: &mut dyn CryptoRngCore) -> Self {
+    pub fn random_paillier_blum(rng: &mut impl CryptoRngCore) -> Self {
         Self::new(
             Secret::init_with(|| random_paillier_blum_prime::<P>(rng)),
             Secret::init_with(|| random_paillier_blum_prime::<P>(rng)),
@@ -84,7 +85,7 @@ impl<P: PaillierParams> SecretPrimesWire<P> {
 
     /// Creates smaller than required primes to trigger an error during tests.
     #[cfg(test)]
-    pub fn random_small_safe(rng: &mut dyn CryptoRngCore) -> Self {
+    pub fn random_small_safe(rng: &mut impl CryptoRngCore) -> Self {
         Self::new(
             Secret::init_with(|| P::HalfUint::generate_safe_prime_with_rng(rng, P::PRIME_BITS - 2)),
             Secret::init_with(|| P::HalfUint::generate_safe_prime_with_rng(rng, P::PRIME_BITS - 2)),
@@ -92,7 +93,7 @@ impl<P: PaillierParams> SecretPrimesWire<P> {
     }
 
     /// Creates a pair of safe primes.
-    pub fn random_safe(rng: &mut dyn CryptoRngCore) -> Self {
+    pub fn random_safe(rng: &mut impl CryptoRngCore) -> Self {
         Self::new(
             Secret::init_with(|| P::HalfUint::generate_safe_prime_with_rng(rng, P::PRIME_BITS)),
             Secret::init_with(|| P::HalfUint::generate_safe_prime_with_rng(rng, P::PRIME_BITS)),
@@ -211,7 +212,7 @@ impl<P: PaillierParams> SecretPrimes<P> {
     }
 
     /// Returns a random in range `[0, \phi(N))`.
-    pub fn random_residue_mod_totient(&self, rng: &mut dyn CryptoRngCore) -> SecretUnsigned<P::Uint> {
+    pub fn random_residue_mod_totient(&self, rng: &mut impl CryptoRngCore) -> SecretUnsigned<P::Uint> {
         SecretUnsigned::new(
             Secret::init_with(|| P::Uint::random_mod(rng, self.totient_nonzero().expose_secret())),
             P::MODULUS_BITS,
@@ -293,7 +294,7 @@ impl<P: PaillierParams> PublicModulus<P> {
     }
 
     /// Returns a uniformly chosen number in range $[0, N)$ such that it is invertible modulo $N$.
-    pub fn random_invertible_residue(&self, rng: &mut dyn CryptoRngCore) -> P::Uint {
+    pub fn random_invertible_residue(&self, rng: &mut impl CryptoRngCore) -> P::Uint {
         let modulus = self.modulus_nonzero();
         loop {
             let r = P::Uint::random_mod(rng, &modulus);
@@ -316,7 +317,7 @@ impl<P: PaillierParams> PublicModulus<P> {
     }
 
     /// Returns a uniformly chosen invertible quadratic residue modulo $N$, in Montgomery form.
-    pub fn random_quadratic_residue(&self, rng: &mut dyn CryptoRngCore) -> <P::Uint as Integer>::Monty {
+    pub fn random_quadratic_residue(&self, rng: &mut impl CryptoRngCore) -> <P::Uint as Integer>::Monty {
         self.random_invertible_residue(rng)
             .to_montgomery(&self.monty_params_mod_n)
             .square()

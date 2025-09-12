@@ -8,10 +8,10 @@ use crate::{
         Ciphertext, CiphertextWire, MaskedRandomizer, PaillierParams, PublicKeyPaillier, RPCommitmentWire, RPParams,
         Randomizer,
     },
-    params::{public_signed_from_scalar, scalar_from_signed, secret_scalar_from_signed, SchemeParams},
+    params::{SchemeParams, public_signed_from_scalar, scalar_from_signed, secret_scalar_from_signed},
     tools::{
-        hashing::{Chain, Hashable, Hasher},
         Secret,
+        hashing::{Chain, Hashable, Hasher},
     },
     uint::{PublicSigned, SecretSigned},
 };
@@ -59,7 +59,7 @@ pub(crate) struct EncElgProof<P: SchemeParams> {
 
 impl<P: SchemeParams> EncElgProof<P> {
     pub fn new(
-        rng: &mut dyn CryptoRngCore,
+        rng: &mut impl CryptoRngCore,
         secret: EncElgSecretInputs<'_, P>,
         public: EncElgPublicInputs<'_, P>,
         setup: &RPParams<P::Paillier>,
@@ -194,13 +194,14 @@ impl<P: SchemeParams> EncElgProof<P> {
 mod tests {
     use manul::{dev::BinaryFormat, session::WireFormat};
     use rand_core::OsRng;
+    use serde::Deserialize;
 
     use super::{EncElgProof, EncElgPublicInputs, EncElgSecretInputs};
     use crate::{
         curve::Scalar,
         dev::TestParams,
         paillier::{Ciphertext, RPParams, Randomizer, SecretKeyPaillierWire},
-        params::{secret_scalar_from_signed, SchemeParams},
+        params::{SchemeParams, secret_scalar_from_signed},
         tools::Secret,
         uint::SecretSigned,
     };
@@ -244,7 +245,7 @@ mod tests {
 
         // Serialization roundtrip
         let serialized = BinaryFormat::serialize(proof).unwrap();
-        let proof = BinaryFormat::deserialize::<EncElgProof<Params>>(&serialized).unwrap();
+        let proof = EncElgProof::<Params>::deserialize(BinaryFormat::deserializer(&serialized)).unwrap();
 
         assert!(proof.verify(public, &setup, &aux));
     }

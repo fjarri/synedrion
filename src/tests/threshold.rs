@@ -1,10 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use digest::typenum::Unsigned;
-use ecdsa::{signature::hazmat::PrehashVerifier, VerifyingKey};
+use ecdsa::{VerifyingKey, signature::hazmat::PrehashVerifier};
 use elliptic_curve::{Curve, FieldBytes};
 use manul::{
-    dev::{run_sync, BinaryFormat, TestSessionParams, TestSigner, TestVerifier},
+    dev::{BinaryFormat, TestSessionParams, TestSigner, TestVerifier, run_sync},
     signature::Keypair,
 };
 use rand_core::OsRng;

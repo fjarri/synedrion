@@ -6,8 +6,8 @@ use crate::{
     curve::{Point, Scalar},
     params::SchemeParams,
     tools::{
-        hashing::{Chain, Hashable, Hasher},
         Secret,
+        hashing::{Chain, Hashable, Hasher},
     },
 };
 
@@ -46,7 +46,7 @@ pub(crate) struct ElogProof<P: SchemeParams> {
 
 impl<P: SchemeParams> ElogProof<P> {
     pub fn new(
-        rng: &mut dyn CryptoRngCore,
+        rng: &mut impl CryptoRngCore,
         secret: ElogSecretInputs<'_, P>,
         public: ElogPublicInputs<'_, P>,
         aux: &impl Hashable,
@@ -133,6 +133,7 @@ impl<P: SchemeParams> ElogProof<P> {
 mod tests {
     use manul::{dev::BinaryFormat, session::WireFormat};
     use rand_core::OsRng;
+    use serde::Deserialize;
 
     use super::{ElogProof, ElogPublicInputs, ElogSecretInputs};
     use crate::{curve::Scalar, dev::TestParams, tools::Secret};
@@ -165,7 +166,7 @@ mod tests {
 
         // Serialization roundtrip
         let serialized = BinaryFormat::serialize(proof).unwrap();
-        let proof = BinaryFormat::deserialize::<ElogProof<Params>>(&serialized).unwrap();
+        let proof = ElogProof::<Params>::deserialize(BinaryFormat::deserializer(&serialized)).unwrap();
 
         assert!(proof.verify(public, &aux));
     }

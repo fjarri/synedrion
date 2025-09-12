@@ -4,9 +4,9 @@ use core::{
 };
 
 use crypto_bigint::{
+    Integer, Invert, Monty,
     modular::Retrieve,
     subtle::{Choice, ConditionallyNegatable},
-    Integer, Invert, Monty,
 };
 use rand_core::CryptoRngCore;
 use serde::{Deserialize, Serialize};
@@ -48,7 +48,7 @@ impl<P: PaillierParams> Randomizer<P> {
         }
     }
 
-    pub fn random(rng: &mut dyn CryptoRngCore, pk: &PublicKeyPaillier<P>) -> Self {
+    pub fn random(rng: &mut impl CryptoRngCore, pk: &PublicKeyPaillier<P>) -> Self {
         let randomizer = Secret::init_with(|| pk.random_invertible_residue(rng));
         Self::new(pk, randomizer)
     }
@@ -197,7 +197,7 @@ impl<P: PaillierParams> Ciphertext<P> {
 
     /// Encrypts the plaintext with a random randomizer.
     #[cfg(any(test, feature = "private-benches"))]
-    pub fn new(rng: &mut dyn CryptoRngCore, pk: &PublicKeyPaillier<P>, plaintext: &SecretSigned<P::Uint>) -> Self {
+    pub fn new(rng: &mut impl CryptoRngCore, pk: &PublicKeyPaillier<P>, plaintext: &SecretSigned<P::Uint>) -> Self {
         Self::new_with_randomizer(pk, plaintext, &Randomizer::random(rng, pk))
     }
 
@@ -368,7 +368,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crypto_bigint::{subtle::ConditionallySelectable, AddMod, Bounded, Integer, NonZero};
+    use crypto_bigint::{AddMod, Bounded, Integer, NonZero, subtle::ConditionallySelectable};
     use rand_core::OsRng;
     use zeroize::Zeroize;
 

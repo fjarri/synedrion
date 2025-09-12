@@ -5,7 +5,7 @@
 
 use alloc::vec::Vec;
 
-use crypto_bigint::{modular::Retrieve, Gcd, Integer, Square};
+use crypto_bigint::{Gcd, Integer, Square, modular::Retrieve};
 use crypto_primes::RandomPrimeWithRng;
 use digest::XofReader;
 use rand::SeedableRng;
@@ -26,7 +26,7 @@ const HASH_TAG: &[u8] = b"P_mod";
 struct ModCommitment<P: SchemeParams>(PublicUint<<P::Paillier as PaillierParams>::Uint>);
 
 impl<P: SchemeParams> ModCommitment<P> {
-    fn random(rng: &mut dyn CryptoRngCore, sk: &SecretKeyPaillier<P::Paillier>) -> Self {
+    fn random(rng: &mut impl CryptoRngCore, sk: &SecretKeyPaillier<P::Paillier>) -> Self {
         Self(sk.random_nonsquare_residue(rng).into())
     }
 }
@@ -74,7 +74,7 @@ pub(crate) struct ModProof<P: SchemeParams> {
 }
 
 impl<P: SchemeParams> ModProof<P> {
-    pub fn new(rng: &mut dyn CryptoRngCore, sk: &SecretKeyPaillier<P::Paillier>, aux: &impl Hashable) -> Self {
+    pub fn new(rng: &mut impl CryptoRngCore, sk: &SecretKeyPaillier<P::Paillier>, aux: &impl Hashable) -> Self {
         let pk = sk.public_key();
         let commitment = ModCommitment::<P>::random(rng, sk);
         let challenge = ModChallenge::<P>::new(pk, &commitment, aux);
@@ -200,6 +200,7 @@ impl<P: SchemeParams> ModProof<P> {
 mod tests {
     use manul::{dev::BinaryFormat, session::WireFormat};
     use rand_core::OsRng;
+    use serde::Deserialize;
 
     use super::ModProof;
     use crate::{dev::TestParams, paillier::SecretKeyPaillierWire, params::SchemeParams};
@@ -218,7 +219,7 @@ mod tests {
 
         // Serialization roundtrip
         let serialized = BinaryFormat::serialize(proof).unwrap();
-        let proof = BinaryFormat::deserialize::<ModProof<Params>>(&serialized).unwrap();
+        let proof = ModProof::<Params>::deserialize(BinaryFormat::deserializer(&serialized)).unwrap();
 
         assert!(proof.verify(pk, &aux));
     }

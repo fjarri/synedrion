@@ -3,20 +3,19 @@
 //! This is a subset of the protocol that generates the auxiliary data, with share update bits removed.
 
 use alloc::{
-    boxed::Box,
     collections::{BTreeMap, BTreeSet},
+    string::String,
 };
-use core::{
-    fmt::{self, Debug, Display},
-    marker::PhantomData,
-};
+use core::{fmt::Debug, marker::PhantomData};
 
 use crypto_bigint::BitOps;
-use manul::protocol::{
-    Artifact, BoxedFormat, BoxedRound, CommunicationInfo, DirectMessage, EchoBroadcast, EntryPoint, FinalizeOutcome,
-    LocalError, MessageValidationError, NormalBroadcast, PartyId, Payload, Protocol, ProtocolError, ProtocolMessage,
-    ProtocolMessagePart, ProtocolValidationError, ReceiveError, RequiredMessageParts, RequiredMessages, Round, RoundId,
-    TransitionInfo,
+use manul::{
+    protocol::{
+        BoxedRound, CommunicationInfo, EntryPoint, EvidenceError, EvidenceMessages, FinalizeOutcome, LocalError,
+        NoArtifact, NoMessage, NoProtocolErrors, PartyId, Protocol, ProtocolError, ProtocolMessage, ReceiveError,
+        RequiredMessageParts, RequiredMessages, Round, RoundId, RoundInfo, TransitionInfo,
+    },
+    utils::{GetOrInvalidEvidence, GetOrLocalError, MapValues, Without, verify_that},
 };
 use rand_core::CryptoRngCore;
 use serde::{Deserialize, Serialize};
@@ -31,7 +30,6 @@ use crate::{
     tools::{
         bitvec::BitVec,
         hashing::{Chain, HashOutput, Hasher},
-        protocol_shortcuts::{verify_that, DeserializeAll, DowncastMap, GetRound, MapValues, SafeGet, Without},
     },
     zk::{FacProof, ModProof, PrmProof},
 };
@@ -42,176 +40,87 @@ pub struct AuxGenProtocol<P: SchemeParams, Id: PartyId>(PhantomData<(P, Id)>);
 
 impl<P: SchemeParams, Id: PartyId> Protocol<Id> for AuxGenProtocol<P, Id> {
     type Result = AuxInfo<P, Id>;
-    type ProtocolError = AuxGenError<P, Id>;
-
-    fn verify_direct_message_is_invalid(
-        format: &BoxedFormat,
-        round_id: &RoundId,
-        message: &DirectMessage,
-    ) -> Result<(), MessageValidationError> {
+    type SharedData = AuxGenSharedData<Id>;
+    fn round_info(round_id: &RoundId) -> Option<RoundInfo<Id, Self>> {
         match round_id {
-            r if r == &1 => message.verify_is_some(),
-            r if r == &2 => message.verify_is_some(),
-            r if r == &3 => message.verify_is_not::<Round3DirectMessage<P>>(format),
-            _ => Err(MessageValidationError::InvalidEvidence("Invalid round number".into())),
-        }
-    }
-
-    fn verify_echo_broadcast_is_invalid(
-        format: &BoxedFormat,
-        round_id: &RoundId,
-        message: &EchoBroadcast,
-    ) -> Result<(), MessageValidationError> {
-        match round_id {
-            r if r == &1 => message.verify_is_not::<Round1EchoBroadcast>(format),
-            r if r == &2 => message.verify_is_not::<Round2EchoBroadcast<P>>(format),
-            r if r == &3 => message.verify_is_some(),
-            _ => Err(MessageValidationError::InvalidEvidence("Invalid round number".into())),
-        }
-    }
-
-    fn verify_normal_broadcast_is_invalid(
-        format: &BoxedFormat,
-        round_id: &RoundId,
-        message: &NormalBroadcast,
-    ) -> Result<(), MessageValidationError> {
-        match round_id {
-            r if r == &1 => message.verify_is_some(),
-            r if r == &2 => message.verify_is_not::<Round2NormalBroadcast<P>>(format),
-            r if r == &3 => message.verify_is_not::<Round3NormalBroadcast<P>>(format),
-            _ => Err(MessageValidationError::InvalidEvidence("Invalid round number".into())),
+            _ if round_id == 1 => Some(RoundInfo::new::<Round1<P, Id>>()),
+            _ if round_id == 2 => Some(RoundInfo::new::<Round2<P, Id>>()),
+            _ if round_id == 3 => Some(RoundInfo::new::<Round3<P, Id>>()),
+            _ => None,
         }
     }
 }
 
-/// Provable AuxGen faults.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AuxGenError<P, Id> {
-    error: Error<Id>,
-    phantom: PhantomData<P>,
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub(super) struct R2Error<P> {
+    error: R2ErrorEnum,
+    phantom: PhantomData<fn() -> P>,
 }
 
-impl<P, Id> From<Error<Id>> for AuxGenError<P, Id> {
-    fn from(source: Error<Id>) -> Self {
+impl<P> From<R2ErrorEnum> for R2Error<P> {
+    fn from(error: R2ErrorEnum) -> Self {
         Self {
-            error: source,
+            error,
             phantom: PhantomData,
         }
     }
 }
 
-impl<P, Id: PartyId> Display for AuxGenError<P, Id> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
-        write!(
-            f,
-            "{}",
-            match self.error {
-                Error::R2HashMismatch => "Round 2: the previously sent hash does not match the public data.",
-                Error::R2PaillierModulusTooSmall => "Round 2: Paillier modulus is too small.",
-                Error::R2RPModulusTooSmall => "Round 2: ring-Pedersent modulus is too small.",
-                Error::R2PrmFailed => "Round 2: `П^{prm}` verification failed.",
-                Error::R3ModFailed => "Round 3: `П^{mod}` verification failed.",
-                Error::R3FacFailed { .. } => "Round 3: `П^{fac}` verification failed.",
-            }
-        )
-    }
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+enum R2ErrorEnum {
+    HashMismatch,
+    PaillierModulusTooSmall,
+    RPModulusTooSmall,
+    PrmFailed,
 }
 
-/// AuxGen error
-#[derive(Debug, Clone, Serialize, Deserialize)]
-enum Error<Id> {
-    R2HashMismatch,
-    R2PaillierModulusTooSmall,
-    R2RPModulusTooSmall,
-    R2PrmFailed,
-    R3ModFailed,
-    R3FacFailed {
-        /// The index $i$ of the node that produced the evidence.
-        reported_by: Id,
-    },
-}
+impl<P: SchemeParams, Id: PartyId> ProtocolError<Id> for R2Error<P> {
+    type Round = Round2<P, Id>;
 
-/// Reconstruct `rid` from echoed messages
-fn reconstruct_rid<P: SchemeParams, Id: PartyId>(
-    format: &BoxedFormat,
-    previous_messages: &BTreeMap<RoundId, ProtocolMessage>,
-    combined_echos: &BTreeMap<RoundId, BTreeMap<Id, EchoBroadcast>>,
-) -> Result<BitVec, ProtocolValidationError> {
-    let r2_ebs = combined_echos
-        .get_round(2)?
-        .deserialize_all::<Round2EchoBroadcast<P>>(format)?;
-    let r2_eb = previous_messages
-        .get_round(2)?
-        .echo_broadcast
-        .deserialize::<Round2EchoBroadcast<P>>(format)?;
-    let mut rid_combined = r2_eb.rid;
-    for message in r2_ebs.values() {
-        rid_combined ^= &message.rid;
-    }
-    Ok(rid_combined)
-}
-
-/// Associated data for AuxGen protocol.
-#[derive(Debug, Clone)]
-pub struct AuxGenAssociatedData<Id> {
-    /// IDs of all participating nodes.
-    pub ids: BTreeSet<Id>,
-}
-
-impl<P: SchemeParams, Id: PartyId> ProtocolError<Id> for AuxGenError<P, Id> {
-    type AssociatedData = AuxGenAssociatedData<Id>;
-
-    fn required_messages(&self) -> RequiredMessages {
+    fn description(&self) -> String {
         match self.error {
-            Error::R2HashMismatch => RequiredMessages::new(
+            R2ErrorEnum::HashMismatch => "The previously sent hash does not match the public data.",
+            R2ErrorEnum::PaillierModulusTooSmall => "Paillier modulus is too small.",
+            R2ErrorEnum::RPModulusTooSmall => "Ring-Pedersen modulus is too small.",
+            R2ErrorEnum::PrmFailed => "`П^{prm}` verification failed.",
+        }
+        .into()
+    }
+
+    fn required_messages(&self, _round_id: &RoundId) -> RequiredMessages {
+        match self.error {
+            R2ErrorEnum::HashMismatch => RequiredMessages::new(
                 RequiredMessageParts::normal_broadcast().and_echo_broadcast(),
                 Some([(1.into(), RequiredMessageParts::echo_broadcast())].into()),
                 None,
             ),
-            Error::R2PaillierModulusTooSmall => {
+            R2ErrorEnum::PaillierModulusTooSmall => {
                 RequiredMessages::new(RequiredMessageParts::normal_broadcast(), None, None)
             }
-            Error::R2RPModulusTooSmall => RequiredMessages::new(RequiredMessageParts::echo_broadcast(), None, None),
-            Error::R2PrmFailed => RequiredMessages::new(
+            R2ErrorEnum::RPModulusTooSmall => RequiredMessages::new(RequiredMessageParts::echo_broadcast(), None, None),
+            R2ErrorEnum::PrmFailed => RequiredMessages::new(
                 RequiredMessageParts::echo_broadcast().and_normal_broadcast(),
                 None,
                 None,
             ),
-            Error::R3ModFailed => RequiredMessages::new(
-                RequiredMessageParts::normal_broadcast(),
-                Some([(2.into(), RequiredMessageParts::echo_broadcast().and_normal_broadcast())].into()),
-                Some([2.into()].into()),
-            ),
-            Error::R3FacFailed { .. } => RequiredMessages::new(
-                RequiredMessageParts::direct_message(),
-                Some([(2.into(), RequiredMessageParts::echo_broadcast().and_normal_broadcast())].into()),
-                Some([2.into()].into()),
-            ),
         }
     }
 
-    fn verify_messages_constitute_error(
+    fn verify_evidence(
         &self,
-        format: &BoxedFormat,
+        _round_id: &RoundId,
         guilty_party: &Id,
         shared_randomness: &[u8],
-        associated_data: &Self::AssociatedData,
-        message: ProtocolMessage,
-        previous_messages: BTreeMap<RoundId, ProtocolMessage>,
-        combined_echos: BTreeMap<RoundId, BTreeMap<Id, EchoBroadcast>>,
-    ) -> Result<(), ProtocolValidationError> {
-        let sid = Sid::new::<P, Id>(shared_randomness, &associated_data.ids);
+        shared_data: &<<Self::Round as Round<Id>>::Protocol as Protocol<Id>>::SharedData,
+        messages: EvidenceMessages<'_, Id, Self::Round>,
+    ) -> Result<(), EvidenceError> {
+        let sid = Sid::new::<P, Id>(shared_randomness, &shared_data.ids);
 
         match &self.error {
-            Error::R2HashMismatch => {
-                let r1_eb = previous_messages
-                    .get_round(1)?
-                    .echo_broadcast
-                    .deserialize::<Round1EchoBroadcast>(format)?;
-                let r2_nb = message
-                    .normal_broadcast
-                    .deserialize::<Round2NormalBroadcast<P>>(format)?;
-                let r2_eb = message.echo_broadcast.deserialize::<Round2EchoBroadcast<P>>(format)?;
+            R2ErrorEnum::HashMismatch => {
+                let r1_eb = messages.previous_echo_broadcast::<Round1<P, Id>>(1)?;
+                let r2_nb = messages.normal_broadcast()?;
+                let r2_eb = messages.echo_broadcast()?;
 
                 let data = PublicData {
                     paillier_pk: r2_nb.paillier_pk.into_precomputed(),
@@ -222,61 +131,136 @@ impl<P: SchemeParams, Id: PartyId> ProtocolError<Id> for AuxGenError<P, Id> {
                 };
                 verify_that(data.hash(&sid, guilty_party) != r1_eb.cap_v)
             }
-            Error::R2PaillierModulusTooSmall => {
-                let r2_nb = message
-                    .normal_broadcast
-                    .deserialize::<Round2NormalBroadcast<P>>(format)?;
+            R2ErrorEnum::PaillierModulusTooSmall => {
+                let r2_nb = messages.normal_broadcast()?;
                 verify_that(
                     r2_nb.paillier_pk.modulus().bits_vartime() < <P::Paillier as PaillierParams>::MODULUS_BITS - 2,
                 )
             }
-            Error::R2RPModulusTooSmall => {
-                let r2_eb = message.echo_broadcast.deserialize::<Round2EchoBroadcast<P>>(format)?;
+            R2ErrorEnum::RPModulusTooSmall => {
+                let r2_eb = messages.echo_broadcast()?;
                 verify_that(
                     r2_eb.rp_params.modulus().bits_vartime() < <P::Paillier as PaillierParams>::MODULUS_BITS - 2,
                 )
             }
-            Error::R2PrmFailed => {
-                let r2_eb = message.echo_broadcast.deserialize::<Round2EchoBroadcast<P>>(format)?;
-                let r2_bc = message
-                    .normal_broadcast
-                    .deserialize::<Round2NormalBroadcast<P>>(format)?;
+            R2ErrorEnum::PrmFailed => {
+                let r2_eb = messages.echo_broadcast()?;
+                let r2_nb = messages.normal_broadcast()?;
                 let aux = (&sid, guilty_party);
                 let rp_params = r2_eb.rp_params.to_precomputed();
-                verify_that(!r2_bc.psi.verify(&rp_params, &aux))
+                verify_that(!r2_nb.psi.verify(&rp_params, &aux))
             }
-            Error::R3ModFailed => {
-                let rid = reconstruct_rid::<P, _>(format, &previous_messages, &combined_echos)?;
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+#[derive_where::derive_where(Serialize, Deserialize)]
+pub(super) struct R3Error<P, Id: PartyId> {
+    error: R3ErrorEnum<Id>,
+    phantom: PhantomData<fn() -> P>,
+}
+
+impl<P, Id: PartyId> From<R3ErrorEnum<Id>> for R3Error<P, Id> {
+    fn from(error: R3ErrorEnum<Id>) -> Self {
+        Self {
+            error,
+            phantom: PhantomData,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+#[derive_where::derive_where(Serialize, Deserialize)]
+enum R3ErrorEnum<Id: PartyId> {
+    ModFailed,
+    FacFailed {
+        /// The index $i$ of the node that produced the evidence.
+        reported_by: Id,
+    },
+}
+
+impl<P: SchemeParams, Id: PartyId> ProtocolError<Id> for R3Error<P, Id> {
+    type Round = Round3<P, Id>;
+
+    fn description(&self) -> String {
+        match self.error {
+            R3ErrorEnum::ModFailed => "`П^{mod}` verification failed.",
+            R3ErrorEnum::FacFailed { .. } => "`П^{fac}` verification failed.",
+        }
+        .into()
+    }
+
+    fn required_messages(&self, _round_id: &RoundId) -> RequiredMessages {
+        match self.error {
+            R3ErrorEnum::ModFailed => RequiredMessages::new(
+                RequiredMessageParts::normal_broadcast(),
+                Some([(2.into(), RequiredMessageParts::echo_broadcast().and_normal_broadcast())].into()),
+                Some([2.into()].into()),
+            ),
+            R3ErrorEnum::FacFailed { .. } => RequiredMessages::new(
+                RequiredMessageParts::direct_message(),
+                Some([(2.into(), RequiredMessageParts::echo_broadcast().and_normal_broadcast())].into()),
+                Some([2.into()].into()),
+            ),
+        }
+    }
+
+    fn verify_evidence(
+        &self,
+        _round_id: &RoundId,
+        guilty_party: &Id,
+        shared_randomness: &[u8],
+        shared_data: &<<Self::Round as Round<Id>>::Protocol as Protocol<Id>>::SharedData,
+        messages: EvidenceMessages<'_, Id, Self::Round>,
+    ) -> Result<(), EvidenceError> {
+        let sid = Sid::new::<P, Id>(shared_randomness, &shared_data.ids);
+
+        match &self.error {
+            R3ErrorEnum::ModFailed => {
+                let rid = reconstruct_rid::<P, _>(&messages)?;
                 let aux = (&sid, guilty_party, &rid);
-                let r2_bc = previous_messages
-                    .get_round(2)?
-                    .normal_broadcast
-                    .deserialize::<Round2NormalBroadcast<P>>(format)?;
-                let r3_bc = message
-                    .normal_broadcast
-                    .deserialize::<Round3NormalBroadcast<P>>(format)?;
-                let paillier_pk = r2_bc.paillier_pk.into_precomputed();
-                verify_that(!r3_bc.psi_prime.verify(&paillier_pk, &aux))
+                let r2_nb = messages.previous_normal_broadcast::<Round2<P, Id>>(2)?;
+                let r3_nb = messages.normal_broadcast()?;
+                let paillier_pk = r2_nb.paillier_pk.into_precomputed();
+                verify_that(!r3_nb.psi_prime.verify(&paillier_pk, &aux))
             }
-            Error::R3FacFailed { reported_by } => {
-                let rid = reconstruct_rid::<P, _>(format, &previous_messages, &combined_echos)?;
+            R3ErrorEnum::FacFailed { reported_by } => {
+                let rid = reconstruct_rid::<P, _>(&messages)?;
                 let aux = (&sid, guilty_party, &rid);
 
-                let r2_eb = combined_echos
-                    .get_round(2)?
-                    .try_get("combined echos for Round 2", reported_by)?
-                    .deserialize::<Round2EchoBroadcast<P>>(format)?;
-                let r2_bc = previous_messages
-                    .get_round(2)?
-                    .normal_broadcast
-                    .deserialize::<Round2NormalBroadcast<P>>(format)?;
-                let r3_dm = message.direct_message.deserialize::<Round3DirectMessage<P>>(format)?;
-                let paillier_pk = r2_bc.paillier_pk.into_precomputed();
+                let r2_eb = messages
+                    .combined_echos::<Round2<P, Id>>(2)?
+                    .get_or_invalid_evidence("combined echos for Round 2", reported_by)?
+                    .clone();
+                let r2_nb = messages.previous_normal_broadcast::<Round2<P, Id>>(2)?;
+                let r3_dm = messages.direct_message()?;
+                let paillier_pk = r2_nb.paillier_pk.into_precomputed();
                 let rp_params = r2_eb.rp_params.to_precomputed();
                 verify_that(!r3_dm.psi.verify(&paillier_pk, &rp_params, &aux))
             }
         }
     }
+}
+
+/// Reconstruct `rid` from echoed messages
+fn reconstruct_rid<P: SchemeParams, Id: PartyId>(
+    messages: &EvidenceMessages<'_, Id, Round3<P, Id>>,
+) -> Result<BitVec, EvidenceError> {
+    let r2_ebs = messages.combined_echos::<Round2<P, Id>>(2)?;
+    let r2_eb = messages.previous_echo_broadcast::<Round2<P, Id>>(2)?;
+    let mut rid_combined = r2_eb.rid;
+    for message in r2_ebs.values() {
+        rid_combined ^= &message.rid;
+    }
+    Ok(rid_combined)
+}
+
+/// Associated data for AuxGen protocol.
+#[derive(Debug, Clone)]
+pub struct AuxGenSharedData<Id> {
+    /// IDs of all participating nodes.
+    pub ids: BTreeSet<Id>,
 }
 
 #[derive(Debug, Clone)]
@@ -333,7 +317,7 @@ where
 
     fn make_round(
         self,
-        rng: &mut dyn CryptoRngCore,
+        rng: &mut impl CryptoRngCore,
         shared_randomness: &[u8],
         id: &Id,
     ) -> Result<BoxedRound<Id, Self::Protocol>, LocalError> {
@@ -380,7 +364,7 @@ where
 
         let round = Round1 { context, public_data };
 
-        Ok(BoxedRound::new_dynamic(round))
+        Ok(BoxedRound::new(round))
     }
 }
 
@@ -404,12 +388,21 @@ pub(super) struct Round1EchoBroadcast {
     pub(super) cap_v: HashOutput,
 }
 
-struct Round1Payload {
+pub(super) struct Round1Payload {
     cap_v: HashOutput,
 }
 
 impl<P: SchemeParams, Id: PartyId> Round<Id> for Round1<P, Id> {
     type Protocol = AuxGenProtocol<P, Id>;
+
+    type DirectMessage = NoMessage;
+    type NormalBroadcast = NoMessage;
+    type EchoBroadcast = Round1EchoBroadcast;
+
+    type Payload = Round1Payload;
+    type Artifact = NoArtifact;
+
+    type ProtocolError = NoProtocolErrors<Self>;
 
     fn transition_info(&self) -> TransitionInfo {
         TransitionInfo::new_linear(1)
@@ -419,51 +412,40 @@ impl<P: SchemeParams, Id: PartyId> Round<Id> for Round1<P, Id> {
         CommunicationInfo::regular(&self.context.other_ids)
     }
 
-    fn make_echo_broadcast(
-        &self,
-        _rng: &mut dyn CryptoRngCore,
-        format: &BoxedFormat,
-    ) -> Result<EchoBroadcast, LocalError> {
-        let message = Round1EchoBroadcast {
+    fn make_echo_broadcast(&self, _rng: &mut impl CryptoRngCore) -> Result<Self::EchoBroadcast, LocalError> {
+        Ok(Round1EchoBroadcast {
             cap_v: self.public_data.hash(&self.context.sid, &self.context.my_id),
-        };
-        EchoBroadcast::new(format, message)
+        })
     }
 
     fn receive_message(
         &self,
-        format: &BoxedFormat,
         _from: &Id,
-        message: ProtocolMessage,
-    ) -> Result<Payload, ReceiveError<Id, Self::Protocol>> {
-        message.normal_broadcast.assert_is_none()?;
-        message.direct_message.assert_is_none()?;
-        let echo_broadcast = message.echo_broadcast.deserialize::<Round1EchoBroadcast>(format)?;
-        let payload = Round1Payload {
-            cap_v: echo_broadcast.cap_v,
-        };
-        Ok(Payload::new(payload))
+        message: ProtocolMessage<Id, Self>,
+    ) -> Result<Self::Payload, ReceiveError<Id, Self>> {
+        Ok(Round1Payload {
+            cap_v: message.echo_broadcast.cap_v,
+        })
     }
 
     fn finalize(
-        self: Box<Self>,
-        _rng: &mut dyn CryptoRngCore,
-        payloads: BTreeMap<Id, Payload>,
-        _artifacts: BTreeMap<Id, Artifact>,
+        self,
+        _rng: &mut impl CryptoRngCore,
+        payloads: BTreeMap<Id, Self::Payload>,
+        _artifacts: BTreeMap<Id, Self::Artifact>,
     ) -> Result<FinalizeOutcome<Id, Self::Protocol>, LocalError> {
-        let payloads = payloads.downcast_all::<Round1Payload>()?;
         let cap_vs = payloads.map_values(|payload| payload.cap_v);
         let next_round = Round2 {
             context: self.context,
             public_data: self.public_data,
             cap_vs,
         };
-        Ok(FinalizeOutcome::AnotherRound(BoxedRound::new_dynamic(next_round)))
+        Ok(FinalizeOutcome::AnotherRound(BoxedRound::new(next_round)))
     }
 }
 
 #[derive(Debug)]
-struct Round2<P: SchemeParams, Id: PartyId> {
+pub(super) struct Round2<P: SchemeParams, Id: PartyId> {
     context: Context<P, Id>,
     public_data: PublicData<P>,
     cap_vs: BTreeMap<Id, HashOutput>,
@@ -484,7 +466,7 @@ pub(super) struct Round2EchoBroadcast<P: SchemeParams> {
 }
 
 #[derive(Debug)]
-struct Round2Payload<P: SchemeParams> {
+pub(super) struct Round2Payload<P: SchemeParams> {
     paillier_pk: PublicKeyPaillier<P::Paillier>, // $N_i$
     rp_params: RPParams<P::Paillier>,            // $\hat{N}_i$, $s_i$, and $t_i$
     rid: BitVec,
@@ -492,6 +474,15 @@ struct Round2Payload<P: SchemeParams> {
 
 impl<P: SchemeParams, Id: PartyId> Round<Id> for Round2<P, Id> {
     type Protocol = AuxGenProtocol<P, Id>;
+
+    type DirectMessage = NoMessage;
+    type NormalBroadcast = Round2NormalBroadcast<P>;
+    type EchoBroadcast = Round2EchoBroadcast<P>;
+
+    type Payload = Round2Payload<P>;
+    type Artifact = NoArtifact;
+
+    type ProtocolError = R2Error<P>;
 
     fn transition_info(&self) -> TransitionInfo {
         TransitionInfo::new_linear(2)
@@ -501,42 +492,28 @@ impl<P: SchemeParams, Id: PartyId> Round<Id> for Round2<P, Id> {
         CommunicationInfo::regular(&self.context.other_ids)
     }
 
-    fn make_normal_broadcast(
-        &self,
-        _rng: &mut dyn CryptoRngCore,
-        format: &BoxedFormat,
-    ) -> Result<NormalBroadcast, LocalError> {
-        let message = Round2NormalBroadcast {
+    fn make_normal_broadcast(&self, _rng: &mut impl CryptoRngCore) -> Result<Self::NormalBroadcast, LocalError> {
+        Ok(Round2NormalBroadcast {
             paillier_pk: self.public_data.paillier_pk.clone().into_wire(),
             psi: self.public_data.psi.clone(),
             u: self.public_data.u.clone(),
-        };
-        NormalBroadcast::new(format, message)
+        })
     }
 
-    fn make_echo_broadcast(
-        &self,
-        _rng: &mut dyn CryptoRngCore,
-        format: &BoxedFormat,
-    ) -> Result<EchoBroadcast, LocalError> {
-        let message = Round2EchoBroadcast::<P> {
+    fn make_echo_broadcast(&self, _rng: &mut impl CryptoRngCore) -> Result<Self::EchoBroadcast, LocalError> {
+        Ok(Round2EchoBroadcast::<P> {
             rid: self.public_data.rid.clone(),
             rp_params: self.public_data.rp_params.to_wire(),
-        };
-        EchoBroadcast::new(format, message)
+        })
     }
 
     fn receive_message(
         &self,
-        format: &BoxedFormat,
         from: &Id,
-        message: ProtocolMessage,
-    ) -> Result<Payload, ReceiveError<Id, Self::Protocol>> {
-        message.direct_message.assert_is_none()?;
-        let echo_broadcast = message.echo_broadcast.deserialize::<Round2EchoBroadcast<P>>(format)?;
-        let normal_broadcast = message
-            .normal_broadcast
-            .deserialize::<Round2NormalBroadcast<P>>(format)?;
+        message: ProtocolMessage<Id, Self>,
+    ) -> Result<Self::Payload, ReceiveError<Id, Self>> {
+        let echo_broadcast = message.echo_broadcast;
+        let normal_broadcast = message.normal_broadcast;
 
         let data = PublicData {
             paillier_pk: normal_broadcast.paillier_pk.into_precomputed(),
@@ -546,41 +523,39 @@ impl<P: SchemeParams, Id: PartyId> Round<Id> for Round2<P, Id> {
             u: normal_broadcast.u,
         };
 
-        let cap_v = self.cap_vs.safe_get("other nodes' `V`", from)?;
+        let cap_v = self.cap_vs.get_or_local_error("other nodes' `V`", from)?;
 
         if &data.hash(&self.context.sid, from) != cap_v {
-            return Err(ReceiveError::protocol(Error::R2HashMismatch.into()));
+            return Err(ReceiveError::Protocol(R2ErrorEnum::HashMismatch.into()));
         }
 
         if data.paillier_pk.modulus().bits_vartime() < <P::Paillier as PaillierParams>::MODULUS_BITS - 2 {
-            return Err(ReceiveError::protocol(Error::R2PaillierModulusTooSmall.into()));
+            return Err(ReceiveError::Protocol(R2ErrorEnum::PaillierModulusTooSmall.into()));
         }
 
         if data.rp_params.modulus().bits_vartime() < <P::Paillier as PaillierParams>::MODULUS_BITS - 2 {
-            return Err(ReceiveError::protocol(Error::R2RPModulusTooSmall.into()));
+            return Err(ReceiveError::Protocol(R2ErrorEnum::RPModulusTooSmall.into()));
         }
 
         let aux = (&self.context.sid, &from);
         if !data.psi.verify(&data.rp_params, &aux) {
-            return Err(ReceiveError::protocol(Error::R2PrmFailed.into()));
+            return Err(ReceiveError::Protocol(R2ErrorEnum::PrmFailed.into()));
         }
 
-        let payload = Round2Payload::<P> {
+        Ok(Round2Payload::<P> {
             paillier_pk: data.paillier_pk,
             rp_params: data.rp_params,
             rid: data.rid,
-        };
-
-        Ok(Payload::new(payload))
+        })
     }
 
     fn finalize(
-        self: Box<Self>,
-        rng: &mut dyn CryptoRngCore,
-        payloads: BTreeMap<Id, Payload>,
-        _artifacts: BTreeMap<Id, Artifact>,
+        self,
+        rng: &mut impl CryptoRngCore,
+        payloads: BTreeMap<Id, Self::Payload>,
+        _artifacts: BTreeMap<Id, Self::Artifact>,
     ) -> Result<FinalizeOutcome<Id, Self::Protocol>, LocalError> {
-        let mut payloads = payloads.downcast_all::<Round2Payload<P>>()?;
+        let mut payloads = payloads;
 
         let mut rid_combined = self.public_data.rid.clone();
         for payload in payloads.values() {
@@ -606,12 +581,12 @@ impl<P: SchemeParams, Id: PartyId> Round<Id> for Round2<P, Id> {
             psi_prime,
         };
 
-        Ok(FinalizeOutcome::AnotherRound(BoxedRound::new_dynamic(next_round)))
+        Ok(FinalizeOutcome::AnotherRound(BoxedRound::new(next_round)))
     }
 }
 
 #[derive(Debug)]
-struct Round3<P: SchemeParams, Id> {
+pub(super) struct Round3<P: SchemeParams, Id> {
     context: Context<P, Id>,
     rid_combined: BitVec,
     r2_payloads: BTreeMap<Id, Round2Payload<P>>,
@@ -633,6 +608,15 @@ pub(super) struct Round3DirectMessage<P: SchemeParams> {
 impl<P: SchemeParams, Id: PartyId> Round<Id> for Round3<P, Id> {
     type Protocol = AuxGenProtocol<P, Id>;
 
+    type DirectMessage = Round3DirectMessage<P>;
+    type NormalBroadcast = Round3NormalBroadcast<P>;
+    type EchoBroadcast = NoMessage;
+
+    type Payload = ();
+    type Artifact = ();
+
+    type ProtocolError = R3Error<P, Id>;
+
     fn transition_info(&self) -> TransitionInfo {
         TransitionInfo::new_linear_terminating(3)
     }
@@ -641,76 +625,64 @@ impl<P: SchemeParams, Id: PartyId> Round<Id> for Round3<P, Id> {
         CommunicationInfo::regular(&self.context.other_ids)
     }
 
-    fn make_normal_broadcast(
-        &self,
-        _rng: &mut dyn CryptoRngCore,
-        format: &BoxedFormat,
-    ) -> Result<NormalBroadcast, LocalError> {
-        let message = Round3NormalBroadcast {
+    fn make_normal_broadcast(&self, _rng: &mut impl CryptoRngCore) -> Result<Self::NormalBroadcast, LocalError> {
+        Ok(Round3NormalBroadcast {
             psi_prime: self.psi_prime.clone(),
-        };
-        NormalBroadcast::new(format, message)
+        })
     }
 
     fn make_direct_message(
         &self,
-        rng: &mut dyn CryptoRngCore,
-        format: &BoxedFormat,
+        rng: &mut impl CryptoRngCore,
         destination: &Id,
-    ) -> Result<(DirectMessage, Option<Artifact>), LocalError> {
+    ) -> Result<(Self::DirectMessage, Self::Artifact), LocalError> {
         let my_id = &self.context.my_id;
         let aux = (&self.context.sid, my_id, &self.rid_combined);
 
-        let r2_payload = self.r2_payloads.safe_get("Round 2 payloads", destination)?;
+        let r2_payload = self.r2_payloads.get_or_local_error("Round 2 payloads", destination)?;
 
         let psi = FacProof::<P>::new(rng, &self.context.paillier_sk, &r2_payload.rp_params, &aux);
 
-        let message = Round3DirectMessage { psi };
-        let dm = DirectMessage::new(format, message)?;
-        Ok((dm, None))
+        Ok((Round3DirectMessage { psi }, ()))
     }
 
     fn receive_message(
         &self,
-        format: &BoxedFormat,
         from: &Id,
-        message: ProtocolMessage,
-    ) -> Result<Payload, ReceiveError<Id, Self::Protocol>> {
-        message.echo_broadcast.assert_is_none()?;
-        let normal_broadcast = message
-            .normal_broadcast
-            .deserialize::<Round3NormalBroadcast<P>>(format)?;
-        let direct_message = message.direct_message.deserialize::<Round3DirectMessage<P>>(format)?;
+        message: ProtocolMessage<Id, Self>,
+    ) -> Result<Self::Payload, ReceiveError<Id, Self>> {
+        let normal_broadcast = message.normal_broadcast;
+        let direct_message = message.direct_message;
 
         let my_id = &self.context.my_id;
 
-        let r2_payload = self.r2_payloads.safe_get("Round 2 payloads", from)?;
+        let r2_payload = self.r2_payloads.get_or_local_error("Round 2 payloads", from)?;
 
         let aux = (&self.context.sid, from, &self.rid_combined);
         if !normal_broadcast.psi_prime.verify(&r2_payload.paillier_pk, &aux) {
-            return Err(ReceiveError::protocol(Error::R3ModFailed.into()));
+            return Err(ReceiveError::Protocol(R3ErrorEnum::ModFailed.into()));
         }
 
         if !direct_message
             .psi
             .verify(&r2_payload.paillier_pk, &self.context.rp_params, &aux)
         {
-            return Err(ReceiveError::protocol(
-                Error::R3FacFailed {
+            return Err(ReceiveError::Protocol(
+                R3ErrorEnum::FacFailed {
                     reported_by: my_id.clone(),
                 }
                 .into(),
             ));
         }
 
-        Ok(Payload::empty())
+        Ok(())
     }
 
     fn finalize(
-        self: Box<Self>,
-        _rng: &mut dyn CryptoRngCore,
-        _payloads: BTreeMap<Id, Payload>,
-        _artifacts: BTreeMap<Id, Artifact>,
+        self,
+        _rng: &mut impl CryptoRngCore,
+        _payloads: BTreeMap<Id, Self::Payload>,
+        _artifacts: BTreeMap<Id, Self::Artifact>,
     ) -> Result<FinalizeOutcome<Id, Self::Protocol>, LocalError> {
         let my_id = &self.context.my_id;
 
@@ -738,7 +710,7 @@ mod tests {
     use alloc::collections::BTreeSet;
 
     use manul::{
-        dev::{run_sync, BinaryFormat, TestSessionParams, TestSigner, TestVerifier},
+        dev::{BinaryFormat, TestSessionParams, TestSigner, TestVerifier, run_sync},
         signature::Keypair,
     };
     use rand_core::OsRng;

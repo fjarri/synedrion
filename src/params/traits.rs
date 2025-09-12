@@ -4,21 +4,21 @@ use core::{fmt::Debug, ops::Add};
 // and `k256` depends on the released one.
 // So as long as that is the case, `k256` `Uint` is separate
 // from the one used throughout the crate.
-use crypto_bigint::{subtle::ConditionallySelectable, Bounded, Integer, PowBoundedExp, RandomMod};
+use crypto_bigint::{Bounded, Integer, PowBoundedExp, RandomMod, subtle::ConditionallySelectable};
 use digest::{ExtendableOutput, Update};
 use ecdsa::hazmat::{DigestPrimitive, SignPrimitive, VerifyPrimitive};
 use elliptic_curve::{
+    Curve, CurveArithmetic, PrimeCurve, PrimeField,
     bigint::{self as bigintv05, Concat, Split},
     generic_array::ArrayLength,
     point::DecompressPoint,
     sec1::{FromEncodedPoint, ModulusSize, ToEncodedPoint},
-    Curve, CurveArithmetic, PrimeCurve, PrimeField,
 };
 use zeroize::Zeroize;
 
 use crate::{
     curve::chain_curve,
-    paillier::{chain_paillier_params, PaillierParams},
+    paillier::{PaillierParams, chain_paillier_params},
     tools::hashing::Chain,
     uint::{BoxedEncoding, Extendable},
 };
@@ -56,9 +56,9 @@ where
     const EPS_BOUND: u32 = Self::Paillier::PRIME_BITS - 2 * Self::L_BOUND; // $\eps$
     /// The parameters of the Paillier encryption.
     type Paillier: PaillierParams<
-        WideUint: Extendable<Self::ExtraWideUint>,
-        Uint: Integer<Monty: PowBoundedExp<Self::ExtraWideUint>>,
-    >;
+            WideUint: Extendable<Self::ExtraWideUint>,
+            Uint: Integer<Monty: PowBoundedExp<Self::ExtraWideUint>>,
+        >;
 
     /// An integer that fits the squared RSA modulus times a small factor.
     /// Used in some ZK proofs.

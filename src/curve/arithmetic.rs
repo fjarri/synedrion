@@ -4,15 +4,15 @@ use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Rem, Sub, SubAssign};
 use digest::XofReader;
 use ecdsa::VerifyingKey;
 use elliptic_curve::{
+    Curve, CurveArithmetic, Field, FieldBytes, FieldBytesSize, Group, NonZeroScalar, PrimeField, ScalarPrimitive,
     bigint::{ArrayEncoding, Concat, NonZero, Split, Zero},
-    generic_array::{typenum::marker_traits::Unsigned, GenericArray},
+    generic_array::{GenericArray, typenum::marker_traits::Unsigned},
     group::Curve as _,
     ops::Reduce,
     point::AffineCoordinates,
     scalar::FromUintUnchecked,
     sec1::{EncodedPoint, FromEncodedPoint, ModulusSize, ToEncodedPoint},
     subtle::{Choice, ConditionallySelectable, CtOption},
-    Curve, CurveArithmetic, Field, FieldBytes, FieldBytesSize, Group, NonZeroScalar, PrimeField, ScalarPrimitive,
 };
 use rand_core::CryptoRngCore;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -24,7 +24,7 @@ use ::{ecdsa::SigningKey, elliptic_curve::SecretKey};
 
 use crate::{
     params::SchemeParams,
-    tools::{hashing::Chain, BoxedRng, Secret},
+    tools::{Secret, hashing::Chain},
     uint::BoxedEncoding,
 };
 
@@ -67,12 +67,12 @@ impl<P: SchemeParams> Scalar<P> {
         Self(backend_scalar)
     }
 
-    pub fn random(rng: &mut dyn CryptoRngCore) -> Self {
-        Self(ScalarPrimitive::<P::Curve>::random(&mut BoxedRng(rng)).into())
+    pub fn random(rng: &mut impl CryptoRngCore) -> Self {
+        Self(ScalarPrimitive::<P::Curve>::random(rng).into())
     }
 
-    pub fn random_nonzero(rng: &mut dyn CryptoRngCore) -> Self {
-        Self(*NonZeroScalar::<P::Curve>::random(&mut BoxedRng(rng)).as_ref())
+    pub fn random_nonzero(rng: &mut impl CryptoRngCore) -> Self {
+        Self(*NonZeroScalar::<P::Curve>::random(rng).as_ref())
     }
 
     pub fn mul_by_generator(&self) -> Point<P> {
@@ -156,7 +156,7 @@ impl<P: SchemeParams> Secret<Scalar<P>> {
 }
 
 pub(crate) fn secret_split<P: SchemeParams>(
-    rng: &mut dyn CryptoRngCore,
+    rng: &mut impl CryptoRngCore,
     scalar: Secret<Scalar<P>>,
     num: usize,
 ) -> Vec<Secret<Scalar<P>>> {
@@ -523,7 +523,7 @@ mod test {
     use rand_chacha::ChaChaRng;
 
     use super::Scalar;
-    use crate::{dev::TestParams, SchemeParams};
+    use crate::{SchemeParams, dev::TestParams};
 
     #[test_log::test]
     fn to_and_from_bytes() {

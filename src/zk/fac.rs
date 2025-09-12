@@ -40,7 +40,7 @@ pub(crate) struct FacProof<P: SchemeParams> {
 
 impl<P: SchemeParams> FacProof<P> {
     pub fn new(
-        rng: &mut dyn CryptoRngCore,
+        rng: &mut impl CryptoRngCore,
         sk0: &SecretKeyPaillier<P::Paillier>,
         setup: &RPParams<P::Paillier>,
         aux: &impl Hashable,
@@ -211,6 +211,7 @@ impl<P: SchemeParams> FacProof<P> {
 mod tests {
     use manul::{dev::BinaryFormat, session::WireFormat};
     use rand_core::OsRng;
+    use serde::Deserialize;
 
     use super::FacProof;
     use crate::{
@@ -235,7 +236,7 @@ mod tests {
 
         // Serialization roundtrip
         let serialized = BinaryFormat::serialize(proof).unwrap();
-        let proof = BinaryFormat::deserialize::<FacProof<Params>>(&serialized).unwrap();
+        let proof = FacProof::<Params>::deserialize(BinaryFormat::deserializer(&serialized)).unwrap();
 
         assert!(proof.verify(pk, &setup, &aux));
     }

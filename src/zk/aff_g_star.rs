@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     curve::Point,
     paillier::{Ciphertext, CiphertextWire, MaskedRandomizer, PaillierParams, PublicKeyPaillier, Randomizer},
-    params::{scalar_from_signed, secret_scalar_from_signed, SchemeParams},
+    params::{SchemeParams, scalar_from_signed, secret_scalar_from_signed},
     tools::{
         bitvec::BitVec,
         hashing::{Chain, Hashable, Hasher},
@@ -82,7 +82,7 @@ pub(crate) struct AffGStarProof<P: SchemeParams> {
 
 impl<P: SchemeParams> AffGStarProof<P> {
     pub fn new(
-        rng: &mut dyn CryptoRngCore,
+        rng: &mut impl CryptoRngCore,
         secret: AffGStarSecretInputs<'_, P>,
         public: AffGStarPublicInputs<'_, P>,
         aux: &impl Hashable,
@@ -262,12 +262,13 @@ impl<P: SchemeParams> AffGStarProof<P> {
 mod tests {
     use manul::{dev::BinaryFormat, session::WireFormat};
     use rand_core::OsRng;
+    use serde::Deserialize;
 
     use super::{AffGStarProof, AffGStarPublicInputs, AffGStarSecretInputs};
     use crate::{
         dev::TestParams,
         paillier::{Ciphertext, Randomizer, SecretKeyPaillierWire},
-        params::{secret_scalar_from_signed, SchemeParams},
+        params::{SchemeParams, secret_scalar_from_signed},
         uint::SecretSigned,
     };
 
@@ -315,7 +316,7 @@ mod tests {
 
         // Serialization roundtrip
         let serialized = BinaryFormat::serialize(proof).unwrap();
-        let proof = BinaryFormat::deserialize::<AffGStarProof<Params>>(&serialized).unwrap();
+        let proof = AffGStarProof::<Params>::deserialize(BinaryFormat::deserializer(&serialized)).unwrap();
 
         assert!(proof.verify(public, &aux));
     }

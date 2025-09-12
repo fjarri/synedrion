@@ -1,31 +1,26 @@
 use alloc::collections::BTreeSet;
 
 use manul::{
-    combinators::misbehave::Misbehaving,
-    dev::{BinaryFormat, TestSessionParams, TestSigner, TestVerifier},
-    protocol::{
-        Artifact, BoxedFormat, BoxedRound, DirectMessage, EchoBroadcast, EntryPoint, LocalError, NormalBroadcast,
-        ProtocolMessagePart,
+    dev::{
+        BinaryFormat, RoundExtension, TestSessionParams, TestSigner, TestVerifier, check_evidence_with_extension,
+        check_evidence_with_extensions,
     },
+    protocol::{LocalError, Round},
     signature::Keypair,
 };
 use rand_chacha::ChaCha8Rng;
 use rand_core::{CryptoRngCore, OsRng, SeedableRng};
 
 use super::super::key_refresh::{
-    KeyRefresh, KeyRefreshAssociatedData, Round1, Round1EchoBroadcast, Round2EchoBroadcast, Round2NormalBroadcast,
-    Round3DirectMessage, Round3EchoBroadcast, Round3NormalBroadcast,
+    KeyRefresh, KeyRefreshSharedData, Round1, Round1EchoBroadcast, Round2, Round2EchoBroadcast, Round2NormalBroadcast,
+    Round3, Round3DirectMessage, Round3EchoBroadcast, Round3NormalBroadcast,
 };
 use crate::{
     curve::Scalar,
     dev::TestParams,
     paillier::{PaillierParams, PublicKeyPaillierWire, RPParams, RPParamsWire, RPSecret, SecretKeyPaillierWire},
     params::SchemeParams,
-    tools::{
-        hashing::Hasher,
-        protocol_shortcuts_dev::{check_evidence_with_behavior, check_invalid_message_evidence, CheckPart},
-        Secret,
-    },
+    tools::{Secret, hashing::Hasher},
     zk::{FacProof, ModProof, PrmProof, SchCommitment, SchProof, SchSecret},
 };
 
@@ -34,7 +29,7 @@ type P = TestParams;
 type SP = TestSessionParams<BinaryFormat>;
 
 #[allow(clippy::type_complexity)]
-fn make_entry_points() -> (KeyRefreshAssociatedData<Id>, Vec<(TestSigner, KeyRefresh<P, Id>)>) {
+fn make_entry_points() -> (Vec<(TestSigner, KeyRefresh<P, Id>)>, KeyRefreshSharedData<Id>) {
     let signers = (0..3).map(TestSigner::new).collect::<Vec<_>>();
     let all_ids = signers.iter().map(TestSigner::verifying_key).collect::<BTreeSet<_>>();
 
@@ -42,697 +37,531 @@ fn make_entry_points() -> (KeyRefreshAssociatedData<Id>, Vec<(TestSigner, KeyRef
         .into_iter()
         .map(|signer| (signer, KeyRefresh::new(all_ids.clone()).unwrap()))
         .collect();
-    (KeyRefreshAssociatedData { ids: all_ids }, entry_points)
-}
-
-fn check_evidence<M>(expected_description: &str) -> Result<(), LocalError>
-where
-    M: Misbehaving<Id, (), EntryPoint = KeyRefresh<P, Id>>,
-{
-    let (associated_data, entry_points) = make_entry_points().clone();
-    check_evidence_with_behavior::<SP, M, _>(&mut OsRng, entry_points, &(), &associated_data, expected_description)
+    (entry_points, KeyRefreshSharedData { ids: all_ids })
 }
 
 #[test]
-fn invalid_messages() {
-    let (associated_data, entry_points) = make_entry_points();
-
-    check_invalid_message_evidence::<SP, _>(
-        &mut OsRng,
-        entry_points.clone(),
-        1,
-        CheckPart::EchoBroadcast,
-        &associated_data,
-        true,
-    )
-    .unwrap();
-    check_invalid_message_evidence::<SP, _>(
-        &mut OsRng,
-        entry_points.clone(),
-        2,
-        CheckPart::EchoBroadcast,
-        &associated_data,
-        true,
-    )
-    .unwrap();
-    check_invalid_message_evidence::<SP, _>(
-        &mut OsRng,
-        entry_points.clone(),
-        3,
-        CheckPart::EchoBroadcast,
-        &associated_data,
-        true,
-    )
-    .unwrap();
-
-    check_invalid_message_evidence::<SP, _>(
-        &mut OsRng,
-        entry_points.clone(),
-        1,
-        CheckPart::NormalBroadcast,
-        &associated_data,
-        false,
-    )
-    .unwrap();
-    check_invalid_message_evidence::<SP, _>(
-        &mut OsRng,
-        entry_points.clone(),
-        2,
-        CheckPart::NormalBroadcast,
-        &associated_data,
-        true,
-    )
-    .unwrap();
-    check_invalid_message_evidence::<SP, _>(
-        &mut OsRng,
-        entry_points.clone(),
-        3,
-        CheckPart::NormalBroadcast,
-        &associated_data,
-        true,
-    )
-    .unwrap();
-
-    check_invalid_message_evidence::<SP, _>(
-        &mut OsRng,
-        entry_points.clone(),
-        1,
-        CheckPart::DirectMessage,
-        &associated_data,
-        false,
-    )
-    .unwrap();
-    check_invalid_message_evidence::<SP, _>(
-        &mut OsRng,
-        entry_points.clone(),
-        2,
-        CheckPart::DirectMessage,
-        &associated_data,
-        false,
-    )
-    .unwrap();
-    check_invalid_message_evidence::<SP, _>(
-        &mut OsRng,
-        entry_points.clone(),
-        3,
-        CheckPart::DirectMessage,
-        &associated_data,
-        true,
-    )
-    .unwrap();
-}
-
-#[test]
-fn r2_hash_mismatch() {
+fn r2_hash_mismatch() -> Result<(), LocalError> {
+    #[derive(Debug, Clone)]
     struct Override;
 
-    impl Misbehaving<Id, ()> for Override {
-        type EntryPoint = KeyRefresh<P, Id>;
+    impl RoundExtension<Id> for Override {
+        type Round = Round1<P, Id>;
 
-        fn modify_echo_broadcast(
-            _rng: &mut dyn CryptoRngCore,
-            round: &BoxedRound<Id, <Self::EntryPoint as EntryPoint<Id>>::Protocol>,
-            _behavior: &(),
-            format: &BoxedFormat,
-
-            echo_broadcast: EchoBroadcast,
-        ) -> Result<EchoBroadcast, LocalError> {
-            if round.id() == 1 {
-                // Send a wrong hash in the Round 1 message
-                let message = Round1EchoBroadcast {
-                    cap_v: Hasher::<<P as SchemeParams>::Digest>::new_with_dst(b"bad hash").finalize(P::SECURITY_BITS),
-                };
-                let echo_broadcast = EchoBroadcast::new(format, message)?;
-                return Ok(echo_broadcast);
-            }
-
-            Ok(echo_broadcast)
+        fn make_echo_broadcast(
+            &self,
+            _rng: &mut impl CryptoRngCore,
+            _round: &Self::Round,
+        ) -> Result<Round1EchoBroadcast, LocalError> {
+            Ok(Round1EchoBroadcast {
+                cap_v: Hasher::<<P as SchemeParams>::Digest>::new_with_dst(b"bad hash").finalize(P::SECURITY_BITS),
+            })
         }
     }
 
-    check_evidence::<Override>("Protocol error: Round 2: the previously sent hash does not match the public data.")
-        .unwrap();
+    check_evidence_with_extension::<SP, _>(
+        &mut OsRng,
+        make_entry_points(),
+        Override,
+        "Protocol error (Round 2): The previously sent hash does not match the public data.",
+    )
 }
 
 #[test]
-fn r2_wrong_ids_x() {
-    struct Override;
+fn r2_wrong_ids_x() -> Result<(), LocalError> {
+    // Technically we only need to modify `X`, but we need to substitute the hash in Round 1 too,
+    // so that in Round 2 the hash check could pass and the execution reaches the IDs check.
+    #[derive(Debug, Clone)]
+    struct R1Override;
 
-    impl Misbehaving<Id, ()> for Override {
-        type EntryPoint = KeyRefresh<P, Id>;
-
-        fn modify_normal_broadcast(
-            _rng: &mut dyn CryptoRngCore,
-            round: &BoxedRound<Id, <Self::EntryPoint as EntryPoint<Id>>::Protocol>,
-            _behavior: &(),
-            format: &BoxedFormat,
-
-            normal_broadcast: NormalBroadcast,
-        ) -> Result<NormalBroadcast, LocalError> {
-            if round.id() == 2 {
-                let mut message = normal_broadcast
-                    .deserialize::<Round2NormalBroadcast<P, Id>>(format)
-                    .unwrap();
-                message.cap_xs.pop_first();
-                let normal_broadcast = NormalBroadcast::new(format, message)?;
-                return Ok(normal_broadcast);
-            }
-
-            Ok(normal_broadcast)
-        }
-
-        fn modify_echo_broadcast(
-            _rng: &mut dyn CryptoRngCore,
-            round: &BoxedRound<Id, <Self::EntryPoint as EntryPoint<Id>>::Protocol>,
-            _behavior: &(),
-            format: &BoxedFormat,
-
-            echo_broadcast: EchoBroadcast,
-        ) -> Result<EchoBroadcast, LocalError> {
-            if round.id() == 1 {
-                // Technically we only need to modify `X`, but we need to substitute the hash in Round 1 too,
-                // so that in Round 2 the hash check could pass and the execution reaches the IDs check.
-                let round1 = round.downcast_ref::<Round1<P, Id>>()?;
-
-                let mut data = round1.public_data.clone();
-                data.cap_xs.pop_first();
-
-                let message = Round1EchoBroadcast {
-                    cap_v: data.hash(&round1.context.sid, &round1.context.my_id),
-                };
-                let echo_broadcast = EchoBroadcast::new(format, message)?;
-                return Ok(echo_broadcast);
-            }
-
-            Ok(echo_broadcast)
+    impl RoundExtension<Id> for R1Override {
+        type Round = Round1<P, Id>;
+        fn make_echo_broadcast(
+            &self,
+            _rng: &mut impl CryptoRngCore,
+            round: &Self::Round,
+        ) -> Result<Round1EchoBroadcast, LocalError> {
+            let mut data = round.public_data.clone();
+            data.cap_xs.pop_first();
+            Ok(Round1EchoBroadcast {
+                cap_v: data.hash(&round.context.sid, &round.context.my_id),
+            })
         }
     }
 
-    check_evidence::<Override>("Protocol error: Round 2: wrong IDs in public shares map.").unwrap();
-}
+    #[derive(Debug, Clone)]
+    struct R2Override;
 
-#[test]
-fn r2_wrong_ids_y() {
-    struct Override;
+    impl RoundExtension<Id> for R2Override {
+        type Round = Round2<P, Id>;
 
-    impl Misbehaving<Id, ()> for Override {
-        type EntryPoint = KeyRefresh<P, Id>;
-
-        fn modify_echo_broadcast(
-            _rng: &mut dyn CryptoRngCore,
-            round: &BoxedRound<Id, <Self::EntryPoint as EntryPoint<Id>>::Protocol>,
-            _behavior: &(),
-            format: &BoxedFormat,
-
-            echo_broadcast: EchoBroadcast,
-        ) -> Result<EchoBroadcast, LocalError> {
-            if round.id() == 1 {
-                // Technically we only need to modify `X`, but we need to substitute the hash in Round 1 too,
-                // so that in Round 2 the hash check could pass and the execution reaches the IDs check.
-                let round1 = round.downcast_ref::<Round1<P, Id>>()?;
-
-                let mut data = round1.public_data.clone();
-                data.cap_ys.pop_first();
-
-                let message = Round1EchoBroadcast {
-                    cap_v: data.hash(&round1.context.sid, &round1.context.my_id),
-                };
-                let echo_broadcast = EchoBroadcast::new(format, message)?;
-                return Ok(echo_broadcast);
-            }
-
-            if round.id() == 2 {
-                let mut message = echo_broadcast
-                    .deserialize::<Round2EchoBroadcast<P, Id>>(format)
-                    .unwrap();
-                message.cap_ys.pop_first();
-                let echo_broadcast = EchoBroadcast::new(format, message)?;
-                return Ok(echo_broadcast);
-            }
-
-            Ok(echo_broadcast)
+        fn make_normal_broadcast(
+            &self,
+            rng: &mut impl CryptoRngCore,
+            round: &Self::Round,
+        ) -> Result<Round2NormalBroadcast<P, Id>, LocalError> {
+            let mut message = round.make_normal_broadcast(rng)?;
+            message.cap_xs.pop_first();
+            Ok(message)
         }
     }
 
-    check_evidence::<Override>("Protocol error: Round 2: wrong IDs in Elgamal keys map.").unwrap();
+    check_evidence_with_extensions::<SP, _>(
+        &mut OsRng,
+        make_entry_points(),
+        |entry_point| entry_point.with_extension(R1Override).with_extension(R2Override),
+        "Protocol error (Round 2): Wrong IDs in public shares map.",
+    )
 }
 
 #[test]
-fn r2_wrong_ids_a() {
-    struct Override;
+fn r2_wrong_ids_y() -> Result<(), LocalError> {
+    // Technically we only need to modify `Y`, but we need to substitute the hash in Round 1 too,
+    // so that in Round 2 the hash check could pass and the execution reaches the IDs check.
+    #[derive(Debug, Clone)]
+    struct R1Override;
 
-    impl Misbehaving<Id, ()> for Override {
-        type EntryPoint = KeyRefresh<P, Id>;
-
-        fn modify_normal_broadcast(
-            _rng: &mut dyn CryptoRngCore,
-            round: &BoxedRound<Id, <Self::EntryPoint as EntryPoint<Id>>::Protocol>,
-            _behavior: &(),
-            format: &BoxedFormat,
-
-            normal_broadcast: NormalBroadcast,
-        ) -> Result<NormalBroadcast, LocalError> {
-            if round.id() == 2 {
-                let mut message = normal_broadcast
-                    .deserialize::<Round2NormalBroadcast<P, Id>>(format)
-                    .unwrap();
-
-                message.cap_as.pop_first();
-                let normal_broadcast = NormalBroadcast::new(format, message)?;
-                return Ok(normal_broadcast);
-            }
-
-            Ok(normal_broadcast)
-        }
-
-        fn modify_echo_broadcast(
-            _rng: &mut dyn CryptoRngCore,
-            round: &BoxedRound<Id, <Self::EntryPoint as EntryPoint<Id>>::Protocol>,
-            _behavior: &(),
-            format: &BoxedFormat,
-
-            echo_broadcast: EchoBroadcast,
-        ) -> Result<EchoBroadcast, LocalError> {
-            if round.id() == 1 {
-                // Technically we only need to modify `A`, but we need to substitute the hash in Round 1 too,
-                // so that in Round 2 the hash check could pass and the execution reaches the IDs check.
-                let round1 = round.downcast_ref::<Round1<P, Id>>()?;
-
-                let mut data = round1.public_data.clone();
-
-                data.cap_as.pop_first();
-
-                let message = Round1EchoBroadcast {
-                    cap_v: data.hash(&round1.context.sid, &round1.context.my_id),
-                };
-                let echo_broadcast = EchoBroadcast::new(format, message)?;
-                return Ok(echo_broadcast);
-            }
-
-            Ok(echo_broadcast)
+    impl RoundExtension<Id> for R1Override {
+        type Round = Round1<P, Id>;
+        fn make_echo_broadcast(
+            &self,
+            _rng: &mut impl CryptoRngCore,
+            round: &Self::Round,
+        ) -> Result<Round1EchoBroadcast, LocalError> {
+            let mut data = round.public_data.clone();
+            data.cap_ys.pop_first();
+            Ok(Round1EchoBroadcast {
+                cap_v: data.hash(&round.context.sid, &round.context.my_id),
+            })
         }
     }
 
-    check_evidence::<Override>("Protocol error: Round 2: wrong IDs in Schnorr commitments map.").unwrap();
+    #[derive(Debug, Clone)]
+    struct R2Override;
+
+    impl RoundExtension<Id> for R2Override {
+        type Round = Round2<P, Id>;
+
+        fn make_echo_broadcast(
+            &self,
+            rng: &mut impl CryptoRngCore,
+            round: &Self::Round,
+        ) -> Result<Round2EchoBroadcast<P, Id>, LocalError> {
+            let mut message = round.make_echo_broadcast(rng)?;
+            message.cap_ys.pop_first();
+            Ok(message)
+        }
+    }
+
+    check_evidence_with_extensions::<SP, _>(
+        &mut OsRng,
+        make_entry_points(),
+        |entry_point| entry_point.with_extension(R1Override).with_extension(R2Override),
+        "Protocol error (Round 2): Wrong IDs in Elgamal keys map.",
+    )
 }
 
 #[test]
-fn r2_paillier_modulus_too_small() {
+fn r2_wrong_ids_a() -> Result<(), LocalError> {
+    // Technically we only need to modify `A`, but we need to substitute the hash in Round 1 too,
+    // so that in Round 2 the hash check could pass and the execution reaches the IDs check.
+    #[derive(Debug, Clone)]
+    struct R1Override;
+
+    impl RoundExtension<Id> for R1Override {
+        type Round = Round1<P, Id>;
+        fn make_echo_broadcast(
+            &self,
+            _rng: &mut impl CryptoRngCore,
+            round: &Self::Round,
+        ) -> Result<Round1EchoBroadcast, LocalError> {
+            let mut data = round.public_data.clone();
+            data.cap_as.pop_first();
+            Ok(Round1EchoBroadcast {
+                cap_v: data.hash(&round.context.sid, &round.context.my_id),
+            })
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    struct R2Override;
+
+    impl RoundExtension<Id> for R2Override {
+        type Round = Round2<P, Id>;
+
+        fn make_normal_broadcast(
+            &self,
+            rng: &mut impl CryptoRngCore,
+            round: &Self::Round,
+        ) -> Result<Round2NormalBroadcast<P, Id>, LocalError> {
+            let mut message = round.make_normal_broadcast(rng)?;
+            message.cap_as.pop_first();
+            Ok(message)
+        }
+    }
+
+    check_evidence_with_extensions::<SP, _>(
+        &mut OsRng,
+        make_entry_points(),
+        |entry_point| entry_point.with_extension(R1Override).with_extension(R2Override),
+        "Protocol error (Round 2): Wrong IDs in Schnorr commitments map.",
+    )
+}
+
+#[test]
+fn r2_paillier_modulus_too_small() -> Result<(), LocalError> {
     fn make_small_modulus_pk<P: PaillierParams>() -> PublicKeyPaillierWire<P> {
         let mut rng = ChaCha8Rng::seed_from_u64(123);
         let paillier_sk = SecretKeyPaillierWire::<P>::random_small(&mut rng);
         paillier_sk.public_key()
     }
 
-    struct Override;
+    #[derive(Debug, Clone)]
+    struct R1Override;
 
-    impl Misbehaving<Id, ()> for Override {
-        type EntryPoint = KeyRefresh<P, Id>;
-
-        fn modify_normal_broadcast(
-            _rng: &mut dyn CryptoRngCore,
-            round: &BoxedRound<Id, <Self::EntryPoint as EntryPoint<Id>>::Protocol>,
-            _behavior: &(),
-            format: &BoxedFormat,
-
-            normal_broadcast: NormalBroadcast,
-        ) -> Result<NormalBroadcast, LocalError> {
-            if round.id() == 2 {
-                let mut message = normal_broadcast
-                    .deserialize::<Round2NormalBroadcast<P, Id>>(format)
-                    .unwrap();
-                message.paillier_pk = make_small_modulus_pk::<<P as SchemeParams>::Paillier>();
-                let normal_broadcast = NormalBroadcast::new(format, message)?;
-                return Ok(normal_broadcast);
-            }
-
-            Ok(normal_broadcast)
-        }
-
-        fn modify_echo_broadcast(
-            _rng: &mut dyn CryptoRngCore,
-            round: &BoxedRound<Id, <Self::EntryPoint as EntryPoint<Id>>::Protocol>,
-            _behavior: &(),
-            format: &BoxedFormat,
-
-            echo_broadcast: EchoBroadcast,
-        ) -> Result<EchoBroadcast, LocalError> {
-            if round.id() == 1 {
-                let round1 = round.downcast_ref::<Round1<P, Id>>()?;
-                let mut data = round1.public_data.clone();
-                data.paillier_pk = make_small_modulus_pk::<<P as SchemeParams>::Paillier>().into_precomputed();
-                let message = Round1EchoBroadcast {
-                    cap_v: data.hash(&round1.context.sid, &round1.context.my_id),
-                };
-                let echo_broadcast = EchoBroadcast::new(format, message)?;
-                return Ok(echo_broadcast);
-            }
-
-            Ok(echo_broadcast)
+    impl RoundExtension<Id> for R1Override {
+        type Round = Round1<P, Id>;
+        fn make_echo_broadcast(
+            &self,
+            _rng: &mut impl CryptoRngCore,
+            round: &Self::Round,
+        ) -> Result<Round1EchoBroadcast, LocalError> {
+            let mut data = round.public_data.clone();
+            data.paillier_pk = make_small_modulus_pk::<<P as SchemeParams>::Paillier>().into_precomputed();
+            Ok(Round1EchoBroadcast {
+                cap_v: data.hash(&round.context.sid, &round.context.my_id),
+            })
         }
     }
 
-    check_evidence::<Override>("Protocol error: Round 2: Paillier modulus is too small.").unwrap();
+    #[derive(Debug, Clone)]
+    struct R2Override;
+
+    impl RoundExtension<Id> for R2Override {
+        type Round = Round2<P, Id>;
+
+        fn make_normal_broadcast(
+            &self,
+            rng: &mut impl CryptoRngCore,
+            round: &Self::Round,
+        ) -> Result<Round2NormalBroadcast<P, Id>, LocalError> {
+            let mut message = round.make_normal_broadcast(rng)?;
+            message.paillier_pk = make_small_modulus_pk::<<P as SchemeParams>::Paillier>();
+            Ok(message)
+        }
+    }
+
+    check_evidence_with_extensions::<SP, _>(
+        &mut OsRng,
+        make_entry_points(),
+        |entry_point| entry_point.with_extension(R1Override).with_extension(R2Override),
+        "Protocol error (Round 2): Paillier modulus is too small.",
+    )
 }
 
 #[test]
-fn r2_rp_modulus_too_small() {
+fn r2_rp_modulus_too_small() -> Result<(), LocalError> {
     fn make_small_modulus_rp_params<P: PaillierParams>() -> RPParamsWire<P> {
         let mut rng = ChaCha8Rng::seed_from_u64(123);
         RPParams::random_small(&mut rng).to_wire()
     }
 
-    struct Override;
+    #[derive(Debug, Clone)]
+    struct R1Override;
 
-    impl Misbehaving<Id, ()> for Override {
-        type EntryPoint = KeyRefresh<P, Id>;
+    impl RoundExtension<Id> for R1Override {
+        type Round = Round1<P, Id>;
+        fn make_echo_broadcast(
+            &self,
+            _rng: &mut impl CryptoRngCore,
+            round: &Self::Round,
+        ) -> Result<Round1EchoBroadcast, LocalError> {
+            let mut data = round.public_data.clone();
+            data.rp_params = make_small_modulus_rp_params::<<P as SchemeParams>::Paillier>().to_precomputed();
 
-        fn modify_echo_broadcast(
-            _rng: &mut dyn CryptoRngCore,
-            round: &BoxedRound<Id, <Self::EntryPoint as EntryPoint<Id>>::Protocol>,
-            _behavior: &(),
-            format: &BoxedFormat,
-
-            echo_broadcast: EchoBroadcast,
-        ) -> Result<EchoBroadcast, LocalError> {
-            if round.id() == 1 {
-                // Technically we only need to modify `X`, but we need to substitute the hash in Round 1 too,
-                // so that in Round 2 the hash check could pass and the execution reaches the IDs check.
-                let round1 = round.downcast_ref::<Round1<P, Id>>()?;
-
-                let mut data = round1.public_data.clone();
-                data.rp_params = make_small_modulus_rp_params::<<P as SchemeParams>::Paillier>().to_precomputed();
-
-                let message = Round1EchoBroadcast {
-                    cap_v: data.hash(&round1.context.sid, &round1.context.my_id),
-                };
-                let echo_broadcast = EchoBroadcast::new(format, message)?;
-                return Ok(echo_broadcast);
-            }
-
-            if round.id() == 2 {
-                let mut message = echo_broadcast
-                    .deserialize::<Round2EchoBroadcast<P, Id>>(format)
-                    .unwrap();
-                message.rp_params = make_small_modulus_rp_params::<<P as SchemeParams>::Paillier>();
-                let echo_broadcast = EchoBroadcast::new(format, message)?;
-                return Ok(echo_broadcast);
-            }
-
-            Ok(echo_broadcast)
+            Ok(Round1EchoBroadcast {
+                cap_v: data.hash(&round.context.sid, &round.context.my_id),
+            })
         }
     }
 
-    check_evidence::<Override>("Protocol error: Round 2: ring-Pedersent modulus is too small.").unwrap();
+    #[derive(Debug, Clone)]
+    struct R2Override;
+
+    impl RoundExtension<Id> for R2Override {
+        type Round = Round2<P, Id>;
+
+        fn make_echo_broadcast(
+            &self,
+            rng: &mut impl CryptoRngCore,
+            round: &Self::Round,
+        ) -> Result<Round2EchoBroadcast<P, Id>, LocalError> {
+            let mut message = round.make_echo_broadcast(rng)?;
+            message.rp_params = make_small_modulus_rp_params::<<P as SchemeParams>::Paillier>();
+            Ok(message)
+        }
+    }
+
+    check_evidence_with_extensions::<SP, _>(
+        &mut OsRng,
+        make_entry_points(),
+        |entry_point| entry_point.with_extension(R1Override).with_extension(R2Override),
+        "Protocol error (Round 2): Ring-Pedersen modulus is too small.",
+    )
 }
 
 #[test]
-fn r2_non_zero_sum_of_changes() {
-    struct Override;
+fn r2_non_zero_sum_of_changes() -> Result<(), LocalError> {
+    #[derive(Debug, Clone)]
+    struct R1Override;
 
-    impl Misbehaving<Id, ()> for Override {
-        type EntryPoint = KeyRefresh<P, Id>;
+    impl RoundExtension<Id> for R1Override {
+        type Round = Round1<P, Id>;
+        fn make_echo_broadcast(
+            &self,
+            _rng: &mut impl CryptoRngCore,
+            round: &Self::Round,
+        ) -> Result<Round1EchoBroadcast, LocalError> {
+            let mut data = round.public_data.clone();
 
-        fn modify_echo_broadcast(
-            _rng: &mut dyn CryptoRngCore,
-            round: &BoxedRound<Id, <Self::EntryPoint as EntryPoint<Id>>::Protocol>,
-            _behavior: &(),
-            format: &BoxedFormat,
+            let (id, _point) = data.cap_xs.pop_first().unwrap();
+            let mut rng = ChaCha8Rng::seed_from_u64(123);
+            data.cap_xs.insert(id, Scalar::random(&mut rng).mul_by_generator());
 
-            echo_broadcast: EchoBroadcast,
-        ) -> Result<EchoBroadcast, LocalError> {
-            if round.id() == 1 {
-                let round1 = round.downcast_ref::<Round1<P, Id>>()?;
-                let mut data = round1.public_data.clone();
-
-                let (id, _point) = data.cap_xs.pop_first().unwrap();
-                let mut rng = ChaCha8Rng::seed_from_u64(123);
-                data.cap_xs.insert(id, Scalar::random(&mut rng).mul_by_generator());
-
-                let message = Round1EchoBroadcast {
-                    cap_v: data.hash(&round1.context.sid, &round1.context.my_id),
-                };
-                let echo_broadcast = EchoBroadcast::new(format, message)?;
-                return Ok(echo_broadcast);
-            }
-
-            Ok(echo_broadcast)
-        }
-
-        fn modify_normal_broadcast(
-            _rng: &mut dyn CryptoRngCore,
-            round: &BoxedRound<Id, <Self::EntryPoint as EntryPoint<Id>>::Protocol>,
-            _behavior: &(),
-            format: &BoxedFormat,
-
-            normal_broadcast: NormalBroadcast,
-        ) -> Result<NormalBroadcast, LocalError> {
-            if round.id() == 2 {
-                let mut message = normal_broadcast
-                    .deserialize::<Round2NormalBroadcast<P, Id>>(format)
-                    .unwrap();
-
-                let (id, _point) = message.cap_xs.pop_first().unwrap();
-                let mut rng = ChaCha8Rng::seed_from_u64(123);
-                message.cap_xs.insert(id, Scalar::random(&mut rng).mul_by_generator());
-
-                let normal_broadcast = NormalBroadcast::new(format, message)?;
-                return Ok(normal_broadcast);
-            }
-
-            Ok(normal_broadcast)
+            Ok(Round1EchoBroadcast {
+                cap_v: data.hash(&round.context.sid, &round.context.my_id),
+            })
         }
     }
 
-    check_evidence::<Override>("Protocol error: Round 2: sum of share changes is not zero.").unwrap();
+    #[derive(Debug, Clone)]
+    struct R2Override;
+
+    impl RoundExtension<Id> for R2Override {
+        type Round = Round2<P, Id>;
+
+        fn make_normal_broadcast(
+            &self,
+            rng: &mut impl CryptoRngCore,
+            round: &Self::Round,
+        ) -> Result<Round2NormalBroadcast<P, Id>, LocalError> {
+            let mut message = round.make_normal_broadcast(rng)?;
+            let (id, _point) = message.cap_xs.pop_first().unwrap();
+            let mut rng = ChaCha8Rng::seed_from_u64(123);
+            message.cap_xs.insert(id, Scalar::random(&mut rng).mul_by_generator());
+            Ok(message)
+        }
+    }
+
+    check_evidence_with_extensions::<SP, _>(
+        &mut OsRng,
+        make_entry_points(),
+        |entry_point| entry_point.with_extension(R1Override).with_extension(R2Override),
+        "Protocol error (Round 2): Sum of share changes is not zero.",
+    )
 }
 
 #[test]
-fn r2_prm_failed() {
-    struct Override;
+fn r2_prm_failed() -> Result<(), LocalError> {
+    #[derive(Debug, Clone)]
+    struct R1Override;
 
-    impl Misbehaving<Id, ()> for Override {
-        type EntryPoint = KeyRefresh<P, Id>;
+    impl RoundExtension<Id> for R1Override {
+        type Round = Round1<P, Id>;
+        fn make_echo_broadcast(
+            &self,
+            _rng: &mut impl CryptoRngCore,
+            round: &Self::Round,
+        ) -> Result<Round1EchoBroadcast, LocalError> {
+            let mut data = round.public_data.clone();
 
-        fn modify_echo_broadcast(
-            _rng: &mut dyn CryptoRngCore,
-            round: &BoxedRound<Id, <Self::EntryPoint as EntryPoint<Id>>::Protocol>,
-            _behavior: &(),
-            format: &BoxedFormat,
+            let mut rng = ChaCha8Rng::seed_from_u64(123);
+            let secret = RPSecret::random(&mut rng);
+            let rp_params = RPParams::random_with_secret(&mut rng, &secret);
+            data.psi = PrmProof::new(&mut rng, &secret, &rp_params, &1u8);
 
-            echo_broadcast: EchoBroadcast,
-        ) -> Result<EchoBroadcast, LocalError> {
-            if round.id() == 1 {
-                let round1 = round.downcast_ref::<Round1<P, Id>>()?;
-                let mut data = round1.public_data.clone();
-
-                let mut rng = ChaCha8Rng::seed_from_u64(123);
-                let secret = RPSecret::random(&mut rng);
-                let rp_params = RPParams::random_with_secret(&mut rng, &secret);
-                data.psi = PrmProof::new(&mut rng, &secret, &rp_params, &1u8);
-
-                let message = Round1EchoBroadcast {
-                    cap_v: data.hash(&round1.context.sid, &round1.context.my_id),
-                };
-                let echo_broadcast = EchoBroadcast::new(format, message)?;
-                return Ok(echo_broadcast);
-            }
-
-            Ok(echo_broadcast)
-        }
-
-        fn modify_normal_broadcast(
-            _rng: &mut dyn CryptoRngCore,
-            round: &BoxedRound<Id, <Self::EntryPoint as EntryPoint<Id>>::Protocol>,
-            _behavior: &(),
-            format: &BoxedFormat,
-
-            normal_broadcast: NormalBroadcast,
-        ) -> Result<NormalBroadcast, LocalError> {
-            if round.id() == 2 {
-                let mut message = normal_broadcast
-                    .deserialize::<Round2NormalBroadcast<P, Id>>(format)
-                    .unwrap();
-
-                let mut rng = ChaCha8Rng::seed_from_u64(123);
-                let secret = RPSecret::random(&mut rng);
-                let rp_params = RPParams::random_with_secret(&mut rng, &secret);
-                message.psi = PrmProof::new(&mut rng, &secret, &rp_params, &1u8);
-
-                let normal_broadcast = NormalBroadcast::new(format, message)?;
-                return Ok(normal_broadcast);
-            }
-
-            Ok(normal_broadcast)
+            Ok(Round1EchoBroadcast {
+                cap_v: data.hash(&round.context.sid, &round.context.my_id),
+            })
         }
     }
 
-    check_evidence::<Override>("Protocol error: Round 2: `П^{prm}` verification failed.").unwrap();
+    #[derive(Debug, Clone)]
+    struct R2Override;
+
+    impl RoundExtension<Id> for R2Override {
+        type Round = Round2<P, Id>;
+
+        fn make_normal_broadcast(
+            &self,
+            rng: &mut impl CryptoRngCore,
+            round: &Self::Round,
+        ) -> Result<Round2NormalBroadcast<P, Id>, LocalError> {
+            let mut message = round.make_normal_broadcast(rng)?;
+
+            let mut rng = ChaCha8Rng::seed_from_u64(123);
+            let secret = RPSecret::random(&mut rng);
+            let rp_params = RPParams::random_with_secret(&mut rng, &secret);
+            message.psi = PrmProof::new(&mut rng, &secret, &rp_params, &1u8);
+
+            Ok(message)
+        }
+    }
+
+    check_evidence_with_extensions::<SP, _>(
+        &mut OsRng,
+        make_entry_points(),
+        |entry_point| entry_point.with_extension(R1Override).with_extension(R2Override),
+        "Protocol error (Round 2): `П^{prm}` verification failed.",
+    )
 }
 
 #[test]
-fn r3_share_change_mismatch() {
+fn r3_share_change_mismatch() -> Result<(), LocalError> {
+    #[derive(Debug, Clone)]
     struct Override;
 
-    impl Misbehaving<Id, ()> for Override {
-        type EntryPoint = KeyRefresh<P, Id>;
+    impl RoundExtension<Id> for Override {
+        type Round = Round3<P, Id>;
 
-        fn modify_direct_message(
-            rng: &mut dyn CryptoRngCore,
-            round: &BoxedRound<Id, <Self::EntryPoint as EntryPoint<Id>>::Protocol>,
-            _behavior: &(),
-            format: &BoxedFormat,
-
-            _destination: &Id,
-            direct_message: DirectMessage,
-            artifact: Option<Artifact>,
-        ) -> Result<(DirectMessage, Option<Artifact>), LocalError> {
-            if round.id() == 3 {
-                let mut message = direct_message.deserialize::<Round3DirectMessage<P>>(format).unwrap();
-                message.cap_c = Scalar::random(rng);
-                let direct_message = DirectMessage::new(format, message)?;
-                return Ok((direct_message, artifact));
-            }
-
-            Ok((direct_message, artifact))
+        fn make_direct_message(
+            &self,
+            rng: &mut impl CryptoRngCore,
+            round: &Self::Round,
+            destination: &Id,
+        ) -> Result<(Round3DirectMessage<P>, ()), LocalError> {
+            let (mut message, artifact) = round.make_direct_message(rng, destination)?;
+            message.cap_c = Scalar::random(rng);
+            Ok((message, artifact))
         }
     }
 
-    check_evidence::<Override>("Protocol error: Round 3: secret share change does not match the public commitment.")
-        .unwrap();
+    check_evidence_with_extension::<SP, _>(
+        &mut OsRng,
+        make_entry_points(),
+        Override,
+        "Protocol error (Round 3): Secret share change does not match the public commitment.",
+    )
 }
 
 #[test]
-fn r3_mod_failed() {
+fn r3_mod_failed() -> Result<(), LocalError> {
+    #[derive(Debug, Clone)]
     struct Override;
 
-    impl Misbehaving<Id, ()> for Override {
-        type EntryPoint = KeyRefresh<P, Id>;
+    impl RoundExtension<Id> for Override {
+        type Round = Round3<P, Id>;
 
-        fn modify_normal_broadcast(
-            rng: &mut dyn CryptoRngCore,
-            round: &BoxedRound<Id, <Self::EntryPoint as EntryPoint<Id>>::Protocol>,
-            _behavior: &(),
-            format: &BoxedFormat,
+        fn make_normal_broadcast(
+            &self,
+            rng: &mut impl CryptoRngCore,
+            round: &Self::Round,
+        ) -> Result<Round3NormalBroadcast<P>, LocalError> {
+            let mut message = round.make_normal_broadcast(rng)?;
 
-            normal_broadcast: NormalBroadcast,
-        ) -> Result<NormalBroadcast, LocalError> {
-            if round.id() == 3 {
-                let mut message = normal_broadcast
-                    .deserialize::<Round3NormalBroadcast<P>>(format)
-                    .unwrap();
+            let sk = SecretKeyPaillierWire::random(rng).into_precomputed();
+            message.psi_prime = ModProof::new(rng, &sk, &1u8);
 
-                let sk = SecretKeyPaillierWire::random(rng).into_precomputed();
-                message.psi_prime = ModProof::new(rng, &sk, &1u8);
-
-                let normal_broadcast = NormalBroadcast::new(format, message)?;
-                return Ok(normal_broadcast);
-            }
-
-            Ok(normal_broadcast)
+            Ok(message)
         }
     }
 
-    check_evidence::<Override>("Protocol error: Round 3: `П^{mod}` verification failed.").unwrap();
+    check_evidence_with_extension::<SP, _>(
+        &mut OsRng,
+        make_entry_points(),
+        Override,
+        "Protocol error (Round 3): `П^{mod}` verification failed.",
+    )
 }
 
 #[test]
-fn r3_fac_failed() {
+fn r3_fac_failed() -> Result<(), LocalError> {
+    #[derive(Debug, Clone)]
     struct Override;
 
-    impl Misbehaving<Id, ()> for Override {
-        type EntryPoint = KeyRefresh<P, Id>;
+    impl RoundExtension<Id> for Override {
+        type Round = Round3<P, Id>;
 
-        fn modify_direct_message(
-            rng: &mut dyn CryptoRngCore,
-            round: &BoxedRound<Id, <Self::EntryPoint as EntryPoint<Id>>::Protocol>,
-            _behavior: &(),
-            format: &BoxedFormat,
+        fn make_direct_message(
+            &self,
+            rng: &mut impl CryptoRngCore,
+            round: &Self::Round,
+            destination: &Id,
+        ) -> Result<(Round3DirectMessage<P>, ()), LocalError> {
+            let (mut message, artifact) = round.make_direct_message(rng, destination)?;
 
-            _destination: &Id,
-            direct_message: DirectMessage,
-            artifact: Option<Artifact>,
-        ) -> Result<(DirectMessage, Option<Artifact>), LocalError> {
-            if round.id() == 3 {
-                let mut message = direct_message.deserialize::<Round3DirectMessage<P>>(format).unwrap();
-                let sk = SecretKeyPaillierWire::random(&mut OsRng).into_precomputed();
-                let rp_params = RPParams::random(rng);
-                message.psi = FacProof::new(rng, &sk, &rp_params, &1u8);
-                let direct_message = DirectMessage::new(format, message)?;
-                return Ok((direct_message, artifact));
-            }
+            let sk = SecretKeyPaillierWire::random(&mut OsRng).into_precomputed();
+            let rp_params = RPParams::random(rng);
+            message.psi = FacProof::new(rng, &sk, &rp_params, &1u8);
 
-            Ok((direct_message, artifact))
+            Ok((message, artifact))
         }
     }
 
-    check_evidence::<Override>("Protocol error: Round 3: `П^{fac}` verification failed.").unwrap();
+    check_evidence_with_extension::<SP, _>(
+        &mut OsRng,
+        make_entry_points(),
+        Override,
+        "Protocol error (Round 3): `П^{fac}` verification failed.",
+    )
 }
 
 #[test]
-fn r3_wrong_ids_hat_psi() {
+fn r3_wrong_ids_hat_psi() -> Result<(), LocalError> {
+    #[derive(Debug, Clone)]
     struct Override;
 
-    impl Misbehaving<Id, ()> for Override {
-        type EntryPoint = KeyRefresh<P, Id>;
+    impl RoundExtension<Id> for Override {
+        type Round = Round3<P, Id>;
 
-        fn modify_echo_broadcast(
-            _rng: &mut dyn CryptoRngCore,
-            round: &BoxedRound<Id, <Self::EntryPoint as EntryPoint<Id>>::Protocol>,
-            _behavior: &(),
-            format: &BoxedFormat,
-
-            echo_broadcast: EchoBroadcast,
-        ) -> Result<EchoBroadcast, LocalError> {
-            if round.id() == 3 {
-                let mut message = echo_broadcast
-                    .deserialize::<Round3EchoBroadcast<P, Id>>(format)
-                    .unwrap();
-                message.hat_psis.pop_first();
-                let echo_broadcast = EchoBroadcast::new(format, message)?;
-                return Ok(echo_broadcast);
-            }
-
-            Ok(echo_broadcast)
+        fn make_echo_broadcast(
+            &self,
+            rng: &mut impl CryptoRngCore,
+            round: &Self::Round,
+        ) -> Result<Round3EchoBroadcast<P, Id>, LocalError> {
+            let mut message = round.make_echo_broadcast(rng)?;
+            message.hat_psis.pop_first();
+            Ok(message)
         }
     }
 
-    check_evidence::<Override>("Protocol error: Round 3: Wrong IDs in Schnorr proofs map.").unwrap();
+    check_evidence_with_extension::<SP, _>(
+        &mut OsRng,
+        make_entry_points(),
+        Override,
+        "Protocol error (Round 3): Wrong IDs in Schnorr proofs map.",
+    )
 }
 
 #[test]
-fn r3_sch_failed() {
+fn r3_sch_failed() -> Result<(), LocalError> {
+    #[derive(Debug, Clone)]
     struct Override;
 
-    impl Misbehaving<Id, ()> for Override {
-        type EntryPoint = KeyRefresh<P, Id>;
+    impl RoundExtension<Id> for Override {
+        type Round = Round3<P, Id>;
 
-        fn modify_echo_broadcast(
-            rng: &mut dyn CryptoRngCore,
-            round: &BoxedRound<Id, <Self::EntryPoint as EntryPoint<Id>>::Protocol>,
-            _behavior: &(),
-            format: &BoxedFormat,
-
-            echo_broadcast: EchoBroadcast,
-        ) -> Result<EchoBroadcast, LocalError> {
-            if round.id() == 3 {
-                let mut message = echo_broadcast
-                    .deserialize::<Round3EchoBroadcast<P, Id>>(format)
-                    .unwrap();
-                let (id, _hat_psi) = message.hat_psis.pop_last().unwrap();
-                let x = Secret::init_with(|| Scalar::random(rng));
-                let cap_x = x.mul_by_generator();
-                let secret = SchSecret::random(rng);
-                let commitment = SchCommitment::new(&secret);
-                let hat_psi = SchProof::new(&secret, &x, &commitment, &cap_x, &1u8);
-                message.hat_psis.insert(id, hat_psi);
-                let echo_broadcast = EchoBroadcast::new(format, message)?;
-                return Ok(echo_broadcast);
-            }
-
-            Ok(echo_broadcast)
+        fn make_echo_broadcast(
+            &self,
+            rng: &mut impl CryptoRngCore,
+            round: &Self::Round,
+        ) -> Result<Round3EchoBroadcast<P, Id>, LocalError> {
+            let mut message = round.make_echo_broadcast(rng)?;
+            let (id, _hat_psi) = message.hat_psis.pop_last().unwrap();
+            let x = Secret::init_with(|| Scalar::random(rng));
+            let cap_x = x.mul_by_generator();
+            let secret = SchSecret::random(rng);
+            let commitment = SchCommitment::new(&secret);
+            let hat_psi = SchProof::new(&secret, &x, &commitment, &cap_x, &1u8);
+            message.hat_psis.insert(id, hat_psi);
+            Ok(message)
         }
     }
 
-    check_evidence::<Override>("Protocol error: Round 3: `П^{sch}` verification failed.").unwrap();
+    check_evidence_with_extension::<SP, _>(
+        &mut OsRng,
+        make_entry_points(),
+        Override,
+        "Protocol error (Round 3): `П^{sch}` verification failed.",
+    )
 }

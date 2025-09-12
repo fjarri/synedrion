@@ -1,11 +1,11 @@
 use core::ops::{Add, Mul, Neg, Not, Sub};
 
 use crypto_bigint::{
+    Bounded, CheckedAdd, CheckedMul, CheckedSub, Integer, NonZero, RandomMod, WrappingAdd, WrappingMul, WrappingNeg,
+    WrappingSub,
     rand_core::CryptoRngCore,
     subtle::{Choice, ConditionallySelectable, ConstantTimeLess, CtOption},
     zeroize::Zeroize,
-    Bounded, CheckedAdd, CheckedMul, CheckedSub, Integer, NonZero, RandomMod, WrappingAdd, WrappingMul, WrappingNeg,
-    WrappingSub,
 };
 
 use super::{Extendable, MulWide, PublicSigned, SecretUnsigned};
@@ -300,7 +300,7 @@ where
     /// sampling from $[-2^{exp-1}+1, 2^{exp-1}]$ (See Section 3, Groups & Fields).
     ///
     /// Note: variable time in `exp`.
-    pub fn random_in_exponent_range(rng: &mut dyn CryptoRngCore, exp: u32) -> Self {
+    pub fn random_in_exponent_range(rng: &mut impl CryptoRngCore, exp: u32) -> Self {
         assert!(exp > 0, "`exp` must be greater than zero");
         assert!(
             exp < T::BITS,
@@ -336,7 +336,7 @@ where
     /// sampling from $[-scale (2^{exp-1}+1), scale 2^{exp-1}]$ (See Section 3, Groups & Fields).
     ///
     /// Note: variable time in `exp` and bit size of `scale`.
-    pub fn random_in_exponent_range_scaled<W>(rng: &mut dyn CryptoRngCore, exp: u32, scale: &T) -> SecretSigned<W>
+    pub fn random_in_exponent_range_scaled<W>(rng: &mut impl CryptoRngCore, exp: u32, scale: &T) -> SecretSigned<W>
     where
         T: Extendable<W>,
         W: Zeroize + Integer + Bounded + ConditionallySelectable + RandomMod,
@@ -380,7 +380,7 @@ where
     ///
     /// Note: variable time in `exp` and bit size of `scale`.
     pub fn random_in_exponent_range_scaled_wide<W, XW>(
-        rng: &mut dyn CryptoRngCore,
+        rng: &mut impl CryptoRngCore,
         exp: u32,
         scale: &W,
     ) -> SecretSigned<XW>
@@ -544,8 +544,8 @@ mod tests {
     use std::ops::Neg;
 
     use crypto_bigint::{
+        Bounded, CheckedMul, CheckedSub, Integer, U128, U1024, U2048,
         subtle::{Choice, ConditionallySelectable},
-        Bounded, CheckedMul, CheckedSub, Integer, U1024, U128, U2048,
     };
     use rand::SeedableRng;
     use rand_chacha::{self, ChaCha8Rng};

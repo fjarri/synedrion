@@ -16,10 +16,10 @@ mod key_resharing;
 #[cfg(test)]
 mod misbehavior_tests;
 
-pub use aux_gen::{AuxGen, AuxGenAssociatedData, AuxGenProtocol};
+pub use aux_gen::{AuxGen, AuxGenProtocol, AuxGenSharedData};
 pub use interactive_signing::{
-    InteractiveSigning, InteractiveSigningAssociatedData, InteractiveSigningProtocol, PrehashedMessage,
+    InteractiveSigning, InteractiveSigningProtocol, InteractiveSigningSharedData, PrehashedMessage,
 };
-pub use key_init::{KeyInit, KeyInitAssociatedData, KeyInitProtocol};
-pub use key_refresh::{KeyRefresh, KeyRefreshAssociatedData, KeyRefreshProtocol};
+pub use key_init::{KeyInit, KeyInitProtocol, KeyInitSharedData};
+pub use key_refresh::{KeyRefresh, KeyRefreshProtocol, KeyRefreshSharedData};
 pub use key_resharing::{KeyResharing, KeyResharingProtocol, NewHolder, OldHolder};

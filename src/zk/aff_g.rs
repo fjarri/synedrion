@@ -8,7 +8,7 @@ use crate::{
         Ciphertext, CiphertextWire, MaskedRandomizer, PaillierParams, PublicKeyPaillier, RPCommitmentWire, RPParams,
         Randomizer,
     },
-    params::{public_signed_from_scalar, scalar_from_signed, secret_scalar_from_signed, SchemeParams},
+    params::{SchemeParams, public_signed_from_scalar, scalar_from_signed, secret_scalar_from_signed},
     tools::hashing::{Chain, Hashable, Hasher},
     uint::{PublicSigned, SecretSigned},
 };
@@ -68,7 +68,7 @@ pub(crate) struct AffGProof<P: SchemeParams> {
 
 impl<P: SchemeParams> AffGProof<P> {
     pub fn new(
-        rng: &mut dyn CryptoRngCore,
+        rng: &mut impl CryptoRngCore,
         secret: AffGSecretInputs<'_, P>,
         public: AffGPublicInputs<'_, P>,
         setup: &RPParams<P::Paillier>,
@@ -256,12 +256,13 @@ impl<P: SchemeParams> AffGProof<P> {
 mod tests {
     use manul::{dev::BinaryFormat, session::WireFormat};
     use rand_core::OsRng;
+    use serde::Deserialize;
 
     use super::{AffGProof, AffGPublicInputs, AffGSecretInputs};
     use crate::{
         dev::TestParams,
         paillier::{Ciphertext, RPParams, Randomizer, SecretKeyPaillierWire},
-        params::{secret_scalar_from_signed, SchemeParams},
+        params::{SchemeParams, secret_scalar_from_signed},
         uint::SecretSigned,
     };
 
@@ -311,7 +312,7 @@ mod tests {
 
         // Serialization roundtrip
         let serialized = BinaryFormat::serialize(proof).unwrap();
-        let proof = BinaryFormat::deserialize::<AffGProof<Params>>(&serialized).unwrap();
+        let proof = AffGProof::<Params>::deserialize(BinaryFormat::deserializer(&serialized)).unwrap();
 
         assert!(proof.verify(public, &rp_params, &aux));
     }

@@ -5,23 +5,19 @@
 //! - Failed Chi error round (Section 4.3.1) - Round 6.
 
 use alloc::{
-    boxed::Box,
     collections::{BTreeMap, BTreeSet},
+    string::String,
 };
-use core::{
-    fmt::{self, Debug, Display},
-    marker::PhantomData,
-};
+use core::{fmt::Debug, marker::PhantomData};
 
 use elliptic_curve::{Curve, FieldBytes};
 use manul::{
     protocol::{
-        Artifact, BoxedFormat, BoxedRound, CommunicationInfo, DirectMessage, EchoBroadcast, EntryPoint,
-        FinalizeOutcome, LocalError, MessageValidationError, NormalBroadcast, PartyId, Payload, Protocol,
-        ProtocolError, ProtocolMessage, ProtocolMessagePart, ProtocolValidationError, ReceiveError,
-        RequiredMessageParts, RequiredMessages, Round, RoundId, TransitionInfo,
+        BoxedRound, CommunicationInfo, EntryPoint, EvidenceError, EvidenceMessages, FinalizeOutcome, LocalError,
+        NoArtifact, NoMessage, PartyId, Protocol, ProtocolError, ProtocolMessage, ReceiveError, RequiredMessageParts,
+        RequiredMessages, Round, RoundId, RoundInfo, TransitionInfo,
     },
-    utils::SerializableMap,
+    utils::{GetOrInvalidEvidence, GetOrLocalError, MapValuesRef, SerializableMap, Without, verify_that},
 };
 use rand_core::CryptoRngCore;
 use serde::{Deserialize, Serialize};
@@ -30,14 +26,10 @@ use crate::{
     curve::{Point, RecoverableSignature, Scalar},
     entities::{AuxInfo, AuxInfoPrecomputed, KeyShare, PublicAuxInfoPrecomputed, PublicAuxInfos, PublicKeyShares},
     paillier::{Ciphertext, CiphertextWire, PaillierParams, Randomizer},
-    params::{chain_scheme_params, secret_scalar_from_signed, secret_signed_from_scalar, SchemeParams},
+    params::{SchemeParams, chain_scheme_params, secret_scalar_from_signed, secret_signed_from_scalar},
     tools::{
-        hashing::{Chain, HashOutput, Hasher},
-        protocol_shortcuts::{
-            sum_non_empty, sum_non_empty_ref, verify_that, DeserializeAll, DowncastMap, GetRound, MapValues, SafeGet,
-            Without,
-        },
         Secret,
+        hashing::{Chain, HashOutput, Hasher},
     },
     uint::SecretSigned,
     zk::{
@@ -46,6 +38,35 @@ use crate::{
         EncElgPublicInputs, EncElgSecretInputs,
     },
 };
+
+/// Analogous to `Iterator::sum()`, but requires a non-empty iterator
+/// (so that it can be used for types with no `default()`, like `Ciphertext`)
+fn sum_non_empty<T, I, E>(mut iter: I, empty_error: E) -> Result<T, E>
+where
+    I: Iterator<Item = Result<T, E>>,
+    T: core::ops::Add<T, Output = T>,
+{
+    let mut result = iter.next().ok_or(empty_error)??;
+    for item in iter {
+        result = result + item?;
+    }
+    Ok(result)
+}
+
+/// Analogous to `Iterator::sum()`, but requires a non-empty iterator
+/// (so that it can be used for types with no `default()`, like `Ciphertext`)
+fn sum_non_empty_ref<'x, T, I, E>(mut iter: I, empty_error: E) -> Result<T, E>
+where
+    I: Iterator<Item = Result<&'x T, E>>,
+    T: 'x + Clone,
+    for<'a> T: core::ops::Add<&'a T, Output = T>,
+{
+    let mut result = iter.next().ok_or(empty_error)??.clone();
+    for item in iter {
+        result = result + item?;
+    }
+    Ok(result)
+}
 
 /// Prehashed message to sign.
 // TODO: Type aliases are not enforced by the compiler, but they should be. Maybe one?
@@ -71,141 +92,888 @@ pub struct InteractiveSigningProtocol<P: SchemeParams, Id: Debug>(PhantomData<(P
 
 impl<P: SchemeParams, Id: PartyId> Protocol<Id> for InteractiveSigningProtocol<P, Id> {
     type Result = RecoverableSignature<P>;
-    type ProtocolError = InteractiveSigningError<P, Id>;
-
-    fn verify_direct_message_is_invalid(
-        format: &BoxedFormat,
-        round_id: &RoundId,
-        message: &DirectMessage,
-    ) -> Result<(), MessageValidationError> {
+    type SharedData = InteractiveSigningSharedData<P, Id>;
+    fn round_info(round_id: &RoundId) -> Option<RoundInfo<Id, Self>> {
         match round_id {
-            r if r == &1 => message.verify_is_not::<Round1DirectMessage<P>>(format),
-            r if r == &2 => message.verify_is_some(),
-            r if r == &3 => message.verify_is_some(),
-            r if r == &4 => message.verify_is_some(),
-            r if r == &5 => message.verify_is_some(),
-            r if r == &6 => message.verify_is_some(),
-            _ => Err(MessageValidationError::InvalidEvidence("Invalid round number".into())),
-        }
-    }
-
-    fn verify_echo_broadcast_is_invalid(
-        format: &BoxedFormat,
-        round_id: &RoundId,
-        message: &EchoBroadcast,
-    ) -> Result<(), MessageValidationError> {
-        match round_id {
-            r if r == &1 => message.verify_is_not::<Round1EchoBroadcast<P>>(format),
-            r if r == &2 => message.verify_is_not::<Round2EchoBroadcast<P, Id>>(format),
-            r if r == &3 => message.verify_is_not::<Round3EchoBroadcast<P>>(format),
-            r if r == &4 => message.verify_is_some(),
-            r if r == &5 => message.verify_is_not::<Round5EchoBroadcast<P, Id>>(format),
-            r if r == &6 => message.verify_is_not::<Round6EchoBroadcast<P, Id>>(format),
-            _ => Err(MessageValidationError::InvalidEvidence("Invalid round number".into())),
-        }
-    }
-
-    fn verify_normal_broadcast_is_invalid(
-        format: &BoxedFormat,
-        round_id: &RoundId,
-        message: &NormalBroadcast,
-    ) -> Result<(), MessageValidationError> {
-        match round_id {
-            r if r == &1 => message.verify_is_some(),
-            r if r == &2 => message.verify_is_not::<Round2NormalBroadcast<P, Id>>(format),
-            r if r == &3 => message.verify_is_not::<Round3NormalBroadcast<P>>(format),
-            r if r == &4 => message.verify_is_not::<Round4NormalBroadcast<P>>(format),
-            r if r == &5 => message.verify_is_some(),
-            r if r == &6 => message.verify_is_some(),
-            _ => Err(MessageValidationError::InvalidEvidence("Invalid round number".into())),
+            _ if round_id == 1 => Some(RoundInfo::new::<Round1<P, Id>>()),
+            _ if round_id == 2 => Some(RoundInfo::new::<Round2<P, Id>>()),
+            _ if round_id == 3 => Some(RoundInfo::new::<Round3<P, Id>>()),
+            _ if round_id == 4 => Some(RoundInfo::new::<Round4<P, Id>>()),
+            _ if round_id == 5 => Some(RoundInfo::new::<Round5<P, Id>>()),
+            _ if round_id == 6 => Some(RoundInfo::new::<Round6<P, Id>>()),
+            _ => None,
         }
     }
 }
 
-/// Possible verifiable errors of the InteractiveSigning protocol.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InteractiveSigningError<P, Id> {
-    error: Error<Id>,
-    phantom: PhantomData<P>,
+pub(super) struct R1Error<P, Id> {
+    error: R1ErrorEnum,
+    phantom: PhantomData<fn() -> (P, Id)>,
 }
 
-impl<P, Id: Debug> Display for InteractiveSigningError<P, Id> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
-        write!(
-            f,
-            "{}",
-            match self.error {
-                Error::R1EncElg0Failed => "Round 1: failed to verify `\\psi^0` (`П^{enc-elg}` proof).",
-                Error::R1EncElg1Failed => "Round 1: failed to verify `\\psi^1` (`П^{enc-elg}` proof).",
-                Error::R2WrongIdsD => "Round 2: wrong IDs in `D` map.",
-                Error::R2WrongIdsF => "Round 2: wrong IDs in `F` map.",
-                Error::R2WrongIdsPsi => "Round 2: wrong IDs in `\\psi` map (`П^{aff-g}` proofs for `D`).",
-                Error::R2AffGPsiFailed { .. } => "Round 2: failed to verify `\\psi` (`П^{aff-g}` proof for `D`).",
-                Error::R2AffGHatPsiFailed { .. } =>
-                    "Round 2: failed to verify `\\hat{psi}` (`П^{aff-g}` proof for `\\hat{D}`).",
-                Error::R2ElogFailed => "Round 2: failed to verify `П^{elog}` proof.",
-                Error::R3ElogFailed => "Round 3: failed to verify `П^{elog}` proof.",
-                Error::R4InvalidSignatureShare => "Round 4: signature share verification failed.",
-                Error::R5DecFailed => "Round 5: `П^{dec}` proof verification failed.",
-                Error::R5WrongIdsPsi => "Round 5: wrong IDs in `П^{aff-g*}` proof map.",
-                Error::R5AffGStarFailed { .. } => "Round 5: `П^{aff-g*}` proof verification failed.",
-                Error::R6DecFailed => "Round 6: `П^{dec}` proof verification failed.",
-                Error::R6WrongIdsPsi => "Round 6: wrong IDs in `П^{aff-g*}` proof map.",
-                Error::R6AffGStarFailed { .. } => "Round 6: `П^{aff-g*}` proof verification failed.",
+#[derive(Debug, Clone, Serialize, Deserialize)]
+enum R1ErrorEnum {
+    EncElg0Failed,
+    EncElg1Failed,
+}
+
+impl<P: SchemeParams, Id: PartyId> ProtocolError<Id> for R1Error<P, Id> {
+    type Round = Round1<P, Id>;
+
+    fn description(&self) -> String {
+        match self.error {
+            R1ErrorEnum::EncElg0Failed => "failed to verify `\\psi^0` (`П^{enc-elg}` proof).",
+            R1ErrorEnum::EncElg1Failed => "failed to verify `\\psi^1` (`П^{enc-elg}` proof).",
+        }
+        .into()
+    }
+
+    fn required_messages(&self, _round_id: &RoundId) -> RequiredMessages {
+        match self.error {
+            R1ErrorEnum::EncElg0Failed => {
+                RequiredMessages::new(RequiredMessageParts::echo_broadcast().and_direct_message(), None, None)
             }
-        )
+            R1ErrorEnum::EncElg1Failed => {
+                RequiredMessages::new(RequiredMessageParts::echo_broadcast().and_direct_message(), None, None)
+            }
+        }
+    }
+
+    fn verify_evidence(
+        &self,
+        _round_id: &RoundId,
+        guilty_party: &Id,
+        shared_randomness: &[u8],
+        shared_data: &<<Self::Round as Round<Id>>::Protocol as Protocol<Id>>::SharedData,
+        messages: EvidenceMessages<'_, Id, Self::Round>,
+    ) -> Result<(), EvidenceError> {
+        let epid = Epid::new::<P, Id>(shared_randomness, shared_data);
+
+        match &self.error {
+            R1ErrorEnum::EncElg0Failed => {
+                let r1_dm = messages.direct_message()?;
+                let r1_eb = messages.echo_broadcast()?;
+
+                let public_aux = &shared_data
+                    .aux
+                    .as_map()
+                    .get_or_invalid_evidence("aux infos", guilty_party)?;
+                let pk = public_aux.paillier_pk.clone().into_precomputed();
+                let rp = public_aux.rp_params.to_precomputed();
+
+                let aux = (&epid, guilty_party);
+
+                verify_that(!r1_dm.psi0.verify(
+                    EncElgPublicInputs {
+                        pk0: &pk,
+                        cap_c: &r1_eb.cap_k.to_precomputed(&pk),
+                        cap_a: &r1_eb.cap_y,
+                        cap_b: &r1_eb.cap_a1,
+                        cap_x: &r1_eb.cap_a2,
+                    },
+                    &rp,
+                    &aux,
+                ))
+            }
+            R1ErrorEnum::EncElg1Failed => {
+                let r1_dm = messages.direct_message()?;
+                let r1_eb = messages.echo_broadcast()?;
+
+                let public_aux = &shared_data
+                    .aux
+                    .as_map()
+                    .get_or_invalid_evidence("aux infos", guilty_party)?;
+                let pk = public_aux.paillier_pk.clone().into_precomputed();
+                let rp = public_aux.rp_params.to_precomputed();
+
+                let aux = (&epid, guilty_party);
+
+                verify_that(!r1_dm.psi1.verify(
+                    EncElgPublicInputs {
+                        pk0: &pk,
+                        cap_c: &r1_eb.cap_g.to_precomputed(&pk),
+                        cap_a: &r1_eb.cap_y,
+                        cap_b: &r1_eb.cap_b1,
+                        cap_x: &r1_eb.cap_b2,
+                    },
+                    &rp,
+                    &aux,
+                ))
+            }
+        }
     }
 }
 
-/// Possible verifiable errors of the InteractiveSigning protocol.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-enum Error<Id> {
-    R1EncElg0Failed,
-    R1EncElg1Failed,
-    R2WrongIdsD,
-    R2WrongIdsF,
-    R2WrongIdsPsi,
-    R2AffGPsiFailed {
+pub(super) struct R2Error<P, Id> {
+    error: R2ErrorEnum<Id>,
+    phantom: PhantomData<fn() -> P>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+enum R2ErrorEnum<Id> {
+    WrongIdsD,
+    WrongIdsF,
+    WrongIdsPsi,
+    AffGPsiFailed {
         /// The index $k$ for which the verification of $\psi_{k,j}$ failed
         /// (where $j$ is the index of the guilty party).
         failed_for: Id,
     },
-    R2AffGHatPsiFailed {
+    AffGHatPsiFailed {
         /// The index $k$ for which the verification of $\hat{\psi}_{k,j}$ failed
         /// (where $j$ is the index of the guilty party).
         failed_for: Id,
     },
-    R2ElogFailed,
-    R3ElogFailed,
-    R4InvalidSignatureShare,
-    R5DecFailed,
-    R5WrongIdsPsi,
-    R5AffGStarFailed {
+    ElogFailed,
+}
+
+impl<P: SchemeParams, Id: PartyId> ProtocolError<Id> for R2Error<P, Id> {
+    type Round = Round2<P, Id>;
+
+    fn description(&self) -> String {
+        match self.error {
+            R2ErrorEnum::WrongIdsD => "wrong IDs in `D` map.",
+            R2ErrorEnum::WrongIdsF => "wrong IDs in `F` map.",
+            R2ErrorEnum::WrongIdsPsi => "wrong IDs in `\\psi` map (`П^{aff-g}` proofs for `D`).",
+            R2ErrorEnum::AffGPsiFailed { .. } => "failed to verify `\\psi` (`П^{aff-g}` proof for `D`).",
+            R2ErrorEnum::AffGHatPsiFailed { .. } => "failed to verify `\\hat{psi}` (`П^{aff-g}` proof for `\\hat{D}`).",
+            R2ErrorEnum::ElogFailed => "failed to verify `П^{elog}` proof.",
+        }
+        .into()
+    }
+
+    fn required_messages(&self, _round_id: &RoundId) -> RequiredMessages {
+        match self.error {
+            R2ErrorEnum::WrongIdsD => RequiredMessages::new(RequiredMessageParts::normal_broadcast(), None, None),
+            R2ErrorEnum::WrongIdsF => RequiredMessages::new(RequiredMessageParts::echo_broadcast(), None, None),
+            R2ErrorEnum::WrongIdsPsi => RequiredMessages::new(RequiredMessageParts::normal_broadcast(), None, None),
+            R2ErrorEnum::AffGPsiFailed { .. } => RequiredMessages::new(
+                RequiredMessageParts::echo_broadcast().and_normal_broadcast(),
+                None,
+                Some([1.into()].into()),
+            ),
+            R2ErrorEnum::AffGHatPsiFailed { .. } => RequiredMessages::new(
+                RequiredMessageParts::echo_broadcast().and_normal_broadcast(),
+                None,
+                Some([1.into()].into()),
+            ),
+            R2ErrorEnum::ElogFailed => RequiredMessages::new(
+                RequiredMessageParts::echo_broadcast().and_normal_broadcast(),
+                Some([(1.into(), RequiredMessageParts::echo_broadcast())].into()),
+                None,
+            ),
+        }
+    }
+
+    fn verify_evidence(
+        &self,
+        _round_id: &RoundId,
+        guilty_party: &Id,
+        shared_randomness: &[u8],
+        shared_data: &<<Self::Round as Round<Id>>::Protocol as Protocol<Id>>::SharedData,
+        messages: EvidenceMessages<'_, Id, Self::Round>,
+    ) -> Result<(), EvidenceError> {
+        let epid = Epid::new::<P, Id>(shared_randomness, shared_data);
+
+        match &self.error {
+            R2ErrorEnum::WrongIdsD => {
+                let r2_nb = messages.normal_broadcast()?;
+                let expected_ids = shared_data
+                    .aux
+                    .as_map()
+                    .keys()
+                    .collect::<BTreeSet<_>>()
+                    .without(&guilty_party);
+                verify_that(r2_nb.cap_ds.keys().collect::<BTreeSet<_>>() != expected_ids)
+            }
+            R2ErrorEnum::WrongIdsF => {
+                let r2_eb = messages.echo_broadcast()?;
+                let expected_ids = shared_data
+                    .aux
+                    .as_map()
+                    .keys()
+                    .collect::<BTreeSet<_>>()
+                    .without(&guilty_party);
+                verify_that(r2_eb.cap_fs.keys().collect::<BTreeSet<_>>() != expected_ids)
+            }
+            R2ErrorEnum::WrongIdsPsi => {
+                let r2_nb = messages.normal_broadcast()?;
+                let expected_ids = shared_data
+                    .aux
+                    .as_map()
+                    .keys()
+                    .collect::<BTreeSet<_>>()
+                    .without(&guilty_party);
+                verify_that(r2_nb.psis.keys().collect::<BTreeSet<_>>() != expected_ids)
+            }
+            R2ErrorEnum::AffGPsiFailed { failed_for } => {
+                let r1_eb = messages
+                    .combined_echos::<Round1<P, Id>>(1)?
+                    .get_or_invalid_evidence("combined echos for Round 1", failed_for)?
+                    .clone();
+                let r2_eb = messages.echo_broadcast()?;
+                let r2_nb = messages.normal_broadcast()?;
+
+                let failed_for_aux = &shared_data
+                    .aux
+                    .as_map()
+                    .get_or_invalid_evidence("aux infos", failed_for)?;
+                let guilty_party_aux = &shared_data
+                    .aux
+                    .as_map()
+                    .get_or_invalid_evidence("aux infos", guilty_party)?;
+
+                let rp = failed_for_aux.rp_params.to_precomputed();
+                let aux = (&epid, guilty_party);
+
+                let for_pk = failed_for_aux.paillier_pk.clone().into_precomputed();
+                let from_pk = guilty_party_aux.paillier_pk.clone().into_precomputed();
+
+                let cap_k = r1_eb.cap_k.to_precomputed(&for_pk);
+                let cap_d = r2_nb
+                    .cap_ds
+                    .get_or_invalid_evidence("`D` map", failed_for)?
+                    .to_precomputed(&for_pk);
+                let cap_f = r2_eb
+                    .cap_fs
+                    .get_or_invalid_evidence("`F` map", failed_for)?
+                    .to_precomputed(&from_pk);
+
+                let psi = r2_nb.psis.get_or_invalid_evidence("`psi` map", failed_for)?;
+                verify_that(!psi.verify(
+                    AffGPublicInputs {
+                        pk0: &for_pk,
+                        pk1: &from_pk,
+                        cap_c: &cap_k,
+                        cap_d: &cap_d,
+                        cap_y: &cap_f,
+                        cap_x: &r2_eb.cap_gamma,
+                    },
+                    &rp,
+                    &aux,
+                ))
+            }
+            R2ErrorEnum::AffGHatPsiFailed { failed_for } => {
+                let r1_eb = messages
+                    .combined_echos::<Round1<P, Id>>(1)?
+                    .get_or_invalid_evidence("combined echos for Round 1", failed_for)?
+                    .clone();
+                let r2_eb = messages.echo_broadcast()?;
+                let r2_nb = messages.normal_broadcast()?;
+
+                let cap_x = shared_data
+                    .shares
+                    .as_map()
+                    .get_or_invalid_evidence("shares", failed_for)?;
+
+                let failed_for_aux = &shared_data
+                    .aux
+                    .as_map()
+                    .get_or_invalid_evidence("aux infos", failed_for)?;
+                let guilty_party_aux = &shared_data
+                    .aux
+                    .as_map()
+                    .get_or_invalid_evidence("aux infos", guilty_party)?;
+
+                let rp = failed_for_aux.rp_params.to_precomputed();
+                let aux = (&epid, guilty_party);
+
+                let for_pk = failed_for_aux.paillier_pk.clone().into_precomputed();
+                let from_pk = guilty_party_aux.paillier_pk.clone().into_precomputed();
+
+                let cap_k = r1_eb.cap_k.to_precomputed(&for_pk);
+                let hat_cap_d = r2_nb
+                    .hat_cap_ds
+                    .get_or_invalid_evidence("`\\hat{D}` map", failed_for)?
+                    .to_precomputed(&for_pk);
+                let hat_cap_f = r2_eb
+                    .hat_cap_fs
+                    .get_or_invalid_evidence("`\\hat{F}` map", failed_for)?
+                    .to_precomputed(&from_pk);
+
+                let hat_psi = r2_nb.hat_psis.get_or_invalid_evidence("`\\hat{psi}` map", failed_for)?;
+                verify_that(!hat_psi.verify(
+                    AffGPublicInputs {
+                        pk0: &for_pk,
+                        pk1: &from_pk,
+                        cap_c: &cap_k,
+                        cap_d: &hat_cap_d,
+                        cap_y: &hat_cap_f,
+                        cap_x,
+                    },
+                    &rp,
+                    &aux,
+                ))
+            }
+            R2ErrorEnum::ElogFailed => {
+                let r1_eb = messages.previous_echo_broadcast::<Round1<P, Id>>(1)?;
+                let r2_nb = messages.normal_broadcast()?;
+                let r2_eb = messages.echo_broadcast()?;
+                let aux = (&epid, guilty_party);
+
+                verify_that(!r2_nb.psi_elog.verify(
+                    ElogPublicInputs {
+                        cap_l: &r1_eb.cap_b1,
+                        cap_m: &r1_eb.cap_b2,
+                        cap_x: &r1_eb.cap_y,
+                        cap_y: &r2_eb.cap_gamma,
+                        h: &Point::generator(),
+                    },
+                    &aux,
+                ))
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct R3Error<P, Id> {
+    error: R3ErrorEnum,
+    phantom: PhantomData<fn() -> (P, Id)>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+enum R3ErrorEnum {
+    ElogFailed,
+}
+
+impl<P: SchemeParams, Id: PartyId> ProtocolError<Id> for R3Error<P, Id> {
+    type Round = Round3<P, Id>;
+
+    fn description(&self) -> String {
+        match self.error {
+            R3ErrorEnum::ElogFailed => "failed to verify `П^{elog}` proof.",
+        }
+        .into()
+    }
+
+    fn required_messages(&self, _round_id: &RoundId) -> RequiredMessages {
+        match self.error {
+            R3ErrorEnum::ElogFailed => RequiredMessages::new(
+                RequiredMessageParts::normal_broadcast(),
+                Some(
+                    [
+                        (1.into(), RequiredMessageParts::echo_broadcast()),
+                        (2.into(), RequiredMessageParts::echo_broadcast()),
+                    ]
+                    .into(),
+                ),
+                None,
+            ),
+        }
+    }
+
+    fn verify_evidence(
+        &self,
+        _round_id: &RoundId,
+        guilty_party: &Id,
+        shared_randomness: &[u8],
+        shared_data: &<<Self::Round as Round<Id>>::Protocol as Protocol<Id>>::SharedData,
+        messages: EvidenceMessages<'_, Id, Self::Round>,
+    ) -> Result<(), EvidenceError> {
+        let epid = Epid::new::<P, Id>(shared_randomness, shared_data);
+
+        match &self.error {
+            R3ErrorEnum::ElogFailed => {
+                let r1_eb = messages.previous_echo_broadcast::<Round1<P, Id>>(1)?;
+                let r2_eb = messages.previous_echo_broadcast::<Round2<P, Id>>(2)?;
+                let r3_nb = messages.normal_broadcast()?;
+                let aux = (&epid, guilty_party);
+
+                verify_that(!r3_nb.psi_prime.verify(
+                    ElogPublicInputs {
+                        cap_l: &r1_eb.cap_a1,
+                        cap_m: &r1_eb.cap_a2,
+                        cap_x: &r1_eb.cap_y,
+                        cap_y: &r3_nb.cap_delta,
+                        h: &r2_eb.cap_gamma,
+                    },
+                    &aux,
+                ))
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct R4Error<P, Id> {
+    error: R4ErrorEnum,
+    phantom: PhantomData<fn() -> (P, Id)>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+enum R4ErrorEnum {
+    InvalidSignatureShare,
+}
+
+impl<P: SchemeParams, Id: PartyId> ProtocolError<Id> for R4Error<P, Id> {
+    type Round = Round4<P, Id>;
+
+    fn description(&self) -> String {
+        match self.error {
+            R4ErrorEnum::InvalidSignatureShare => "signature share verification failed.",
+        }
+        .into()
+    }
+
+    fn required_messages(&self, _round_id: &RoundId) -> RequiredMessages {
+        match self.error {
+            R4ErrorEnum::InvalidSignatureShare => RequiredMessages::new(
+                RequiredMessageParts::normal_broadcast(),
+                Some(
+                    [
+                        (2.into(), RequiredMessageParts::echo_broadcast()),
+                        (3.into(), RequiredMessageParts::echo_broadcast().and_normal_broadcast()),
+                    ]
+                    .into(),
+                ),
+                Some([2.into(), 3.into()].into()),
+            ),
+        }
+    }
+
+    fn verify_evidence(
+        &self,
+        _round_id: &RoundId,
+        _guilty_party: &Id,
+        _shared_randomness: &[u8],
+        shared_data: &<<Self::Round as Round<Id>>::Protocol as Protocol<Id>>::SharedData,
+        messages: EvidenceMessages<'_, Id, Self::Round>,
+    ) -> Result<(), EvidenceError> {
+        match &self.error {
+            R4ErrorEnum::InvalidSignatureShare => {
+                let r2_ebs = messages.combined_echos::<Round2<P, Id>>(2)?;
+                let r2_eb = messages.previous_echo_broadcast::<Round2<P, Id>>(2)?;
+                let r3_nb = messages.previous_normal_broadcast::<Round3<P, Id>>(3)?;
+                let r3_ebs = messages.combined_echos::<Round3<P, Id>>(3)?;
+                let r3_eb = messages.previous_echo_broadcast::<Round3<P, Id>>(3)?;
+                let r4_nb = messages.normal_broadcast()?;
+
+                let cap_gamma = r2_eb.cap_gamma + r2_ebs.values().map(|eb| eb.cap_gamma).sum();
+                let nonce = cap_gamma.x_coordinate();
+                let delta = r3_eb.delta + r3_ebs.values().map(|eb| eb.delta).sum::<Scalar<P>>();
+                let delta_inv = Option::<Scalar<P>>::from(delta.invert())
+                    .ok_or_else(|| EvidenceError::InvalidEvidence("`delta` is not invertible".into()))?;
+                let tilde_cap_delta = r3_nb.cap_delta * delta_inv;
+                let tilde_cap_s = r3_nb.cap_s * delta_inv;
+                let scalar_message = Scalar::from_reduced_bytes(shared_data.message.clone());
+
+                verify_that(cap_gamma * r4_nb.sigma != tilde_cap_delta * scalar_message + tilde_cap_s * nonce)
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct R5Error<P, Id> {
+    error: R5ErrorEnum<Id>,
+    phantom: PhantomData<fn() -> P>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+enum R5ErrorEnum<Id> {
+    DecFailed,
+    WrongIdsPsi,
+    AffGStarFailed {
         /// The index $\ell$ for which the verification of $\psi_{j,\ell}$ failed
         /// (where $j$ is the index of the guilty party).
         failed_for: Id,
     },
-    R6DecFailed,
-    R6WrongIdsPsi,
-    R6AffGStarFailed {
+}
+
+impl<P: SchemeParams, Id: PartyId> ProtocolError<Id> for R5Error<P, Id> {
+    type Round = Round5<P, Id>;
+
+    fn description(&self) -> String {
+        match self.error {
+            R5ErrorEnum::DecFailed => "`П^{dec}` proof verification failed.",
+            R5ErrorEnum::WrongIdsPsi => "wrong IDs in `П^{aff-g*}` proof map.",
+            R5ErrorEnum::AffGStarFailed { .. } => "`П^{aff-g*}` proof verification failed.",
+        }
+        .into()
+    }
+
+    fn required_messages(&self, _round_id: &RoundId) -> RequiredMessages {
+        match self.error {
+            R5ErrorEnum::DecFailed => RequiredMessages::new(
+                RequiredMessageParts::echo_broadcast(),
+                Some(
+                    [
+                        (1.into(), RequiredMessageParts::echo_broadcast()),
+                        (2.into(), RequiredMessageParts::echo_broadcast().and_normal_broadcast()),
+                        (3.into(), RequiredMessageParts::normal_broadcast()),
+                    ]
+                    .into(),
+                ),
+                Some([2.into()].into()),
+            ),
+            R5ErrorEnum::WrongIdsPsi => RequiredMessages::new(RequiredMessageParts::echo_broadcast(), None, None),
+            R5ErrorEnum::AffGStarFailed { .. } => RequiredMessages::new(
+                RequiredMessageParts::echo_broadcast(),
+                Some([(2.into(), RequiredMessageParts::echo_broadcast().and_normal_broadcast())].into()),
+                Some([1.into(), 2.into()].into()),
+            ),
+        }
+    }
+
+    fn verify_evidence(
+        &self,
+        _round_id: &RoundId,
+        guilty_party: &Id,
+        shared_randomness: &[u8],
+        shared_data: &<<Self::Round as Round<Id>>::Protocol as Protocol<Id>>::SharedData,
+        messages: EvidenceMessages<'_, Id, Self::Round>,
+    ) -> Result<(), EvidenceError> {
+        let epid = Epid::new::<P, Id>(shared_randomness, shared_data);
+
+        match &self.error {
+            R5ErrorEnum::DecFailed => {
+                let r1_eb = messages.previous_echo_broadcast::<Round1<P, Id>>(1)?;
+                let r2_ebs = messages.combined_echos::<Round2<P, Id>>(2)?;
+                let r2_nb = messages.previous_normal_broadcast::<Round2<P, Id>>(2)?;
+                let r2_eb = messages.previous_echo_broadcast::<Round2<P, Id>>(2)?;
+                let r3_nb = messages.previous_normal_broadcast::<Round3<P, Id>>(3)?;
+                let r5_eb = messages.echo_broadcast()?;
+
+                // Calculate `D_j` where `j = guilty_party`.
+                // `D_j = sum_{l != j}(D_{l,j} + F_{j,l})
+                //
+                // r2_eb: contains D_{l,j}, F_{l,j} for l != j
+                // => D_{l,j} = r2_eb.cap_ds[l]
+                // r2_ebs[i], i != j: contains D_{l,i}, F_{l,i} for l != i
+                // => F_{j,l} = r2_ebs[l].cap_fs[j]
+
+                let public_aux = &shared_data
+                    .aux
+                    .as_map()
+                    .get_or_invalid_evidence("aux infos", guilty_party)?;
+                let pk = public_aux.paillier_pk.clone().into_precomputed();
+                let rp = public_aux.rp_params.to_precomputed();
+                let aux = (&epid, guilty_party);
+
+                let ids = shared_data
+                    .aux
+                    .as_map()
+                    .keys()
+                    .collect::<BTreeSet<_>>()
+                    .without(&guilty_party);
+
+                let cap_d = sum_non_empty(
+                    ids.iter()
+                        .map(|id| Ok(r2_nb.cap_ds.get_or_invalid_evidence("`D` map", id)?.to_precomputed(&pk))),
+                    EvidenceError::InvalidEvidence("There must be at least two parties".into()),
+                )? + sum_non_empty(
+                    ids.iter().map(|id| {
+                        Ok(r2_ebs
+                            .get_or_invalid_evidence("Round 2 echo broadcasts", id)?
+                            .cap_fs
+                            .get_or_invalid_evidence("`F` map", guilty_party)?
+                            .to_precomputed(&pk))
+                    }),
+                    EvidenceError::InvalidEvidence("There must be at least two parties".into()),
+                )?;
+
+                let cap_k = r1_eb.cap_k.to_precomputed(&pk);
+
+                verify_that(!r5_eb.psi_star.verify(
+                    DecPublicInputs {
+                        pk0: &pk,
+                        cap_k: &cap_k,
+                        cap_x: &r2_eb.cap_gamma,
+                        cap_d: &cap_d,
+                        cap_s: &r3_nb.cap_delta,
+                        cap_g: &Point::generator(),
+                        num_parties: shared_data.aux.num_parties(),
+                    },
+                    &rp,
+                    &aux,
+                ))
+            }
+            R5ErrorEnum::WrongIdsPsi => {
+                // TODO (#188): currently unreachable from tests
+                let r5_eb = messages.echo_broadcast()?;
+                let expected_ids = shared_data
+                    .aux
+                    .as_map()
+                    .keys()
+                    .collect::<BTreeSet<_>>()
+                    .without(&guilty_party);
+                verify_that(r5_eb.psis.keys().collect::<BTreeSet<_>>() != expected_ids)
+            }
+            R5ErrorEnum::AffGStarFailed { failed_for } => {
+                // TODO (#188): currently unreachable from tests
+                let r1_ebs = messages.combined_echos::<Round1<P, Id>>(1)?;
+                let r2_ebs = messages.combined_echos::<Round2<P, Id>>(2)?;
+                let r2_nb = messages.previous_normal_broadcast::<Round2<P, Id>>(2)?;
+                let r2_eb = messages.previous_echo_broadcast::<Round2<P, Id>>(2)?;
+                let r5_eb = messages.echo_broadcast()?;
+
+                let failed_for_aux = &shared_data
+                    .aux
+                    .as_map()
+                    .get_or_invalid_evidence("aux infos", failed_for)?;
+                let guilty_party_aux = &shared_data
+                    .aux
+                    .as_map()
+                    .get_or_invalid_evidence("aux infos", guilty_party)?;
+
+                let failed_for_pk = failed_for_aux.paillier_pk.clone().into_precomputed();
+
+                let guilty_party_pk = guilty_party_aux.paillier_pk.clone().into_precomputed();
+                let aux = (&epid, guilty_party);
+
+                // l = failed_for
+                // j = guilty_party
+                // i = reported_by
+
+                let cap_d = r2_nb
+                    .cap_ds
+                    .get_or_invalid_evidence("`D` map", failed_for)?
+                    .to_precomputed(&failed_for_pk);
+                let cap_k = r1_ebs
+                    .get_or_invalid_evidence("Round 1 echo broadcasts", failed_for)?
+                    .cap_k
+                    .to_precomputed(&failed_for_pk);
+                let cap_f = r2_ebs
+                    .get_or_invalid_evidence("Round 2 echo broadcasts", failed_for)?
+                    .cap_fs
+                    .get_or_invalid_evidence("`F` map", guilty_party)?
+                    .to_precomputed(&guilty_party_pk);
+
+                let psi = r5_eb.psis.get_or_invalid_evidence("`\\{psi}` map", failed_for)?;
+
+                verify_that(!psi.verify(
+                    AffGStarPublicInputs {
+                        pk0: &guilty_party_pk,
+                        pk1: &failed_for_pk,
+                        cap_c: &cap_d,
+                        cap_d: &cap_k,
+                        cap_y: &cap_f,
+                        cap_x: &r2_eb.cap_gamma,
+                    },
+                    &aux,
+                ))
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct R6Error<P, Id> {
+    error: R6ErrorEnum<Id>,
+    phantom: PhantomData<fn() -> P>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+enum R6ErrorEnum<Id> {
+    DecFailed,
+    WrongIdsPsi,
+    AffGStarFailed {
         /// The index $\ell$ for which the verification of $\hat{\psi}_{j,\ell}$ failed
         /// (where $j$ is the index of the guilty party).
         failed_for: Id,
     },
 }
 
-impl<P, Id> From<Error<Id>> for InteractiveSigningError<P, Id> {
-    fn from(source: Error<Id>) -> Self {
-        Self {
-            error: source,
-            phantom: PhantomData,
+impl<P: SchemeParams, Id: PartyId> ProtocolError<Id> for R6Error<P, Id> {
+    type Round = Round6<P, Id>;
+
+    fn description(&self) -> String {
+        match self.error {
+            R6ErrorEnum::DecFailed => "`П^{dec}` proof verification failed.",
+            R6ErrorEnum::WrongIdsPsi => "wrong IDs in `П^{aff-g*}` proof map.",
+            R6ErrorEnum::AffGStarFailed { .. } => "`П^{aff-g*}` proof verification failed.",
+        }
+        .into()
+    }
+
+    fn required_messages(&self, _round_id: &RoundId) -> RequiredMessages {
+        match self.error {
+            R6ErrorEnum::DecFailed => RequiredMessages::new(
+                RequiredMessageParts::echo_broadcast(),
+                Some(
+                    [
+                        (1.into(), RequiredMessageParts::echo_broadcast()),
+                        (2.into(), RequiredMessageParts::echo_broadcast().and_normal_broadcast()),
+                        (3.into(), RequiredMessageParts::normal_broadcast()),
+                    ]
+                    .into(),
+                ),
+                Some([2.into()].into()),
+            ),
+            R6ErrorEnum::WrongIdsPsi => RequiredMessages::new(RequiredMessageParts::echo_broadcast(), None, None),
+            R6ErrorEnum::AffGStarFailed { .. } => RequiredMessages::new(
+                RequiredMessageParts::echo_broadcast(),
+                None,
+                Some([1.into(), 2.into()].into()),
+            ),
+        }
+    }
+
+    fn verify_evidence(
+        &self,
+        _round_id: &RoundId,
+        guilty_party: &Id,
+        shared_randomness: &[u8],
+        shared_data: &<<Self::Round as Round<Id>>::Protocol as Protocol<Id>>::SharedData,
+        messages: EvidenceMessages<'_, Id, Self::Round>,
+    ) -> Result<(), EvidenceError> {
+        let epid = Epid::new::<P, Id>(shared_randomness, shared_data);
+
+        match &self.error {
+            R6ErrorEnum::DecFailed => {
+                let r1_eb = messages.previous_echo_broadcast::<Round1<P, Id>>(1)?;
+                let r2_ebs = messages.combined_echos::<Round2<P, Id>>(2)?;
+                let r2_nb = messages.previous_normal_broadcast::<Round2<P, Id>>(2)?;
+                let r2_eb = messages.previous_echo_broadcast::<Round2<P, Id>>(2)?;
+                let r3_nb = messages.previous_normal_broadcast::<Round3<P, Id>>(3)?;
+                let r6_eb = messages.echo_broadcast()?;
+
+                // Calculate `\hat{D}_j` where `j = guilty_party`.
+                // `\hat{D}_j = sum_{l != j}(\hat{D}_{l,j} + \hat{F}_{j,l})
+                //
+                // r2_eb: contains \hat{D}_{l,j}, \hat{F}_{l,j} for l != j
+                // => \hat{D}_{l,j} = r2_eb.hat_cap_ds[l]
+                // r2_ebs[i], i != j: contains \hat{D}_{l,i}, \hat{F}_{l,i} for l != i
+                // => \hat{F}_{j,l} = r2_ebs[l].hat_cap_fs[j]
+
+                let public_aux = &shared_data
+                    .aux
+                    .as_map()
+                    .get_or_invalid_evidence("aux infos", guilty_party)?;
+                let pk = public_aux.paillier_pk.clone().into_precomputed();
+                let rp = public_aux.rp_params.to_precomputed();
+                let aux = (&epid, guilty_party);
+
+                let ids = shared_data
+                    .aux
+                    .as_map()
+                    .keys()
+                    .collect::<BTreeSet<_>>()
+                    .without(&guilty_party);
+
+                let hat_cap_d = sum_non_empty(
+                    ids.iter().map(|id| {
+                        Ok(r2_nb
+                            .hat_cap_ds
+                            .get_or_invalid_evidence("`\\hat{D}` map", id)?
+                            .to_precomputed(&pk))
+                    }),
+                    EvidenceError::InvalidEvidence("There must be at least two parties".into()),
+                )? + sum_non_empty(
+                    ids.iter().map(|id| {
+                        Ok(r2_ebs
+                            .get_or_invalid_evidence("Round 2 echo broadcasts", id)?
+                            .hat_cap_fs
+                            .get_or_invalid_evidence("`\\hat{F}` map", guilty_party)?
+                            .to_precomputed(&pk))
+                    }),
+                    EvidenceError::InvalidEvidence("There must be at least two parties".into()),
+                )?;
+
+                let cap_k = r1_eb.cap_k.to_precomputed(&pk);
+
+                let total_cap_gamma = r2_eb.cap_gamma + r2_ebs.values().map(|eb| eb.cap_gamma).sum();
+
+                let cap_x = shared_data
+                    .shares
+                    .as_map()
+                    .get_or_invalid_evidence("`X` map", guilty_party)?;
+
+                verify_that(!r6_eb.hat_psi_star.verify(
+                    DecPublicInputs {
+                        pk0: &pk,
+                        cap_k: &cap_k,
+                        cap_x,
+                        cap_d: &hat_cap_d,
+                        cap_s: &r3_nb.cap_s,
+                        cap_g: &total_cap_gamma,
+                        num_parties: shared_data.aux.num_parties(),
+                    },
+                    &rp,
+                    &aux,
+                ))
+            }
+            R6ErrorEnum::WrongIdsPsi => {
+                // TODO (#188): currently unreachable from tests
+                let r6_eb = messages.echo_broadcast()?;
+                let expected_ids = shared_data
+                    .aux
+                    .as_map()
+                    .keys()
+                    .collect::<BTreeSet<_>>()
+                    .without(&guilty_party);
+                verify_that(r6_eb.hat_psis.keys().collect::<BTreeSet<_>>() != expected_ids)
+            }
+            R6ErrorEnum::AffGStarFailed { failed_for } => {
+                // TODO (#188): currently unreachable from tests
+                let r1_ebs = messages.combined_echos::<Round1<P, Id>>(1)?;
+                let r2_ebs = messages.combined_echos::<Round2<P, Id>>(2)?;
+                let r2_nb = messages.previous_normal_broadcast::<Round2<P, Id>>(2)?;
+                let r6_eb = messages.echo_broadcast()?;
+
+                let failed_for_aux = &shared_data
+                    .aux
+                    .as_map()
+                    .get_or_invalid_evidence("aux infos", failed_for)?;
+                let guilty_party_aux = &shared_data
+                    .aux
+                    .as_map()
+                    .get_or_invalid_evidence("aux infos", guilty_party)?;
+
+                let failed_for_pk = failed_for_aux.paillier_pk.clone().into_precomputed();
+
+                let guilty_party_pk = guilty_party_aux.paillier_pk.clone().into_precomputed();
+                let aux = (&epid, guilty_party);
+
+                let cap_x = shared_data
+                    .shares
+                    .as_map()
+                    .get_or_invalid_evidence("shares", failed_for)?;
+
+                // l = failed_for
+                // j = guilty_party
+                // i = reported_by
+
+                let hat_cap_d = r2_nb
+                    .hat_cap_ds
+                    .get_or_invalid_evidence("`\\hat{D}` map", failed_for)?
+                    .to_precomputed(&failed_for_pk);
+                let cap_k = r1_ebs
+                    .get_or_invalid_evidence("Round 1 echo broadcasts", failed_for)?
+                    .cap_k
+                    .to_precomputed(&failed_for_pk);
+                let hat_cap_f = r2_ebs
+                    .get_or_invalid_evidence("Round 2 echo broadcasts", failed_for)?
+                    .hat_cap_fs
+                    .get_or_invalid_evidence("`\\hat{F}` map", guilty_party)?
+                    .to_precomputed(&guilty_party_pk);
+
+                let hat_psi = r6_eb
+                    .hat_psis
+                    .get_or_invalid_evidence("`\\hat{\\psi}` map", failed_for)?;
+
+                verify_that(!hat_psi.verify(
+                    AffGStarPublicInputs {
+                        pk0: &guilty_party_pk,
+                        pk1: &failed_for_pk,
+                        cap_c: &hat_cap_d,
+                        cap_d: &cap_k,
+                        cap_y: &hat_cap_f,
+                        cap_x,
+                    },
+                    &aux,
+                ))
+            }
         }
     }
 }
 
 /// Associated data for InteractiveSigning protocol.
 #[derive(Debug, Clone)]
-pub struct InteractiveSigningAssociatedData<P: SchemeParams, Id: PartyId> {
+pub struct InteractiveSigningSharedData<P: SchemeParams, Id: PartyId> {
     /// Public shares of all participating nodes.
     pub shares: PublicKeyShares<P, Id>,
     /// Auxiliary data of all participating nodes.
@@ -214,7 +982,7 @@ pub struct InteractiveSigningAssociatedData<P: SchemeParams, Id: PartyId> {
     pub message: PrehashedMessage<P::Curve>,
 }
 
-impl<P: SchemeParams, Id: PartyId> InteractiveSigningAssociatedData<P, Id> {
+impl<P: SchemeParams, Id: PartyId> InteractiveSigningSharedData<P, Id> {
     /// Creates the associated data for evidence verification of InteractiveSigning.
     pub fn new(
         message: PrehashedMessage<P::Curve>,
@@ -247,670 +1015,16 @@ pub(crate) struct Epid(HashOutput);
 impl Epid {
     fn new<P: SchemeParams, Id: PartyId>(
         shared_randomness: &[u8],
-        associated_data: &InteractiveSigningAssociatedData<P, Id>,
+        shared_data: &InteractiveSigningSharedData<P, Id>,
     ) -> Self {
         let digest = Hasher::<P::Digest>::new_with_dst(b"EPID");
         let digest = chain_scheme_params::<P, _>(digest);
         let digest = digest
             .chain(&shared_randomness)
-            .chain(&associated_data.shares)
-            .chain(&associated_data.aux);
+            .chain(&shared_data.shares)
+            .chain(&shared_data.aux);
 
         Self(digest.finalize(P::SECURITY_BITS))
-    }
-}
-
-impl<P: SchemeParams, Id: PartyId> ProtocolError<Id> for InteractiveSigningError<P, Id> {
-    type AssociatedData = InteractiveSigningAssociatedData<P, Id>;
-
-    fn required_messages(&self) -> RequiredMessages {
-        match self.error {
-            Error::R1EncElg0Failed => {
-                RequiredMessages::new(RequiredMessageParts::echo_broadcast().and_direct_message(), None, None)
-            }
-            Error::R1EncElg1Failed => {
-                RequiredMessages::new(RequiredMessageParts::echo_broadcast().and_direct_message(), None, None)
-            }
-            Error::R2WrongIdsD => RequiredMessages::new(RequiredMessageParts::normal_broadcast(), None, None),
-            Error::R2WrongIdsF => RequiredMessages::new(RequiredMessageParts::echo_broadcast(), None, None),
-            Error::R2WrongIdsPsi => RequiredMessages::new(RequiredMessageParts::normal_broadcast(), None, None),
-            Error::R2AffGPsiFailed { .. } => RequiredMessages::new(
-                RequiredMessageParts::echo_broadcast().and_normal_broadcast(),
-                None,
-                Some([1.into()].into()),
-            ),
-            Error::R2AffGHatPsiFailed { .. } => RequiredMessages::new(
-                RequiredMessageParts::echo_broadcast().and_normal_broadcast(),
-                None,
-                Some([1.into()].into()),
-            ),
-            Error::R2ElogFailed => RequiredMessages::new(
-                RequiredMessageParts::echo_broadcast().and_normal_broadcast(),
-                Some([(1.into(), RequiredMessageParts::echo_broadcast())].into()),
-                None,
-            ),
-            Error::R3ElogFailed => RequiredMessages::new(
-                RequiredMessageParts::normal_broadcast(),
-                Some(
-                    [
-                        (1.into(), RequiredMessageParts::echo_broadcast()),
-                        (2.into(), RequiredMessageParts::echo_broadcast()),
-                    ]
-                    .into(),
-                ),
-                None,
-            ),
-            Error::R4InvalidSignatureShare => RequiredMessages::new(
-                RequiredMessageParts::normal_broadcast(),
-                Some(
-                    [
-                        (2.into(), RequiredMessageParts::echo_broadcast()),
-                        (3.into(), RequiredMessageParts::echo_broadcast().and_normal_broadcast()),
-                    ]
-                    .into(),
-                ),
-                Some([2.into(), 3.into()].into()),
-            ),
-            Error::R5DecFailed => RequiredMessages::new(
-                RequiredMessageParts::echo_broadcast(),
-                Some(
-                    [
-                        (1.into(), RequiredMessageParts::echo_broadcast()),
-                        (2.into(), RequiredMessageParts::echo_broadcast().and_normal_broadcast()),
-                        (3.into(), RequiredMessageParts::normal_broadcast()),
-                    ]
-                    .into(),
-                ),
-                Some([2.into()].into()),
-            ),
-            Error::R5WrongIdsPsi => RequiredMessages::new(RequiredMessageParts::echo_broadcast(), None, None),
-            Error::R5AffGStarFailed { .. } => RequiredMessages::new(
-                RequiredMessageParts::echo_broadcast(),
-                Some([(2.into(), RequiredMessageParts::echo_broadcast().and_normal_broadcast())].into()),
-                Some([1.into(), 2.into()].into()),
-            ),
-            Error::R6DecFailed => RequiredMessages::new(
-                RequiredMessageParts::echo_broadcast(),
-                Some(
-                    [
-                        (1.into(), RequiredMessageParts::echo_broadcast()),
-                        (2.into(), RequiredMessageParts::echo_broadcast().and_normal_broadcast()),
-                        (3.into(), RequiredMessageParts::normal_broadcast()),
-                    ]
-                    .into(),
-                ),
-                Some([2.into()].into()),
-            ),
-            Error::R6WrongIdsPsi => RequiredMessages::new(RequiredMessageParts::echo_broadcast(), None, None),
-            Error::R6AffGStarFailed { .. } => RequiredMessages::new(
-                RequiredMessageParts::echo_broadcast(),
-                None,
-                Some([1.into(), 2.into()].into()),
-            ),
-        }
-    }
-
-    fn verify_messages_constitute_error(
-        &self,
-        format: &BoxedFormat,
-        guilty_party: &Id,
-        shared_randomness: &[u8],
-        associated_data: &Self::AssociatedData,
-        message: ProtocolMessage,
-        previous_messages: BTreeMap<RoundId, ProtocolMessage>,
-        combined_echos: BTreeMap<RoundId, BTreeMap<Id, EchoBroadcast>>,
-    ) -> Result<(), ProtocolValidationError> {
-        let epid = Epid::new::<P, Id>(shared_randomness, associated_data);
-
-        match &self.error {
-            Error::R1EncElg0Failed => {
-                let r1_dm = message.direct_message.deserialize::<Round1DirectMessage<P>>(format)?;
-                let r1_eb = message.echo_broadcast.deserialize::<Round1EchoBroadcast<P>>(format)?;
-
-                let public_aux = &associated_data.aux.as_map().try_get("aux infos", guilty_party)?;
-                let pk = public_aux.paillier_pk.clone().into_precomputed();
-                let rp = public_aux.rp_params.to_precomputed();
-
-                let aux = (&epid, guilty_party);
-
-                verify_that(!r1_dm.psi0.verify(
-                    EncElgPublicInputs {
-                        pk0: &pk,
-                        cap_c: &r1_eb.cap_k.to_precomputed(&pk),
-                        cap_a: &r1_eb.cap_y,
-                        cap_b: &r1_eb.cap_a1,
-                        cap_x: &r1_eb.cap_a2,
-                    },
-                    &rp,
-                    &aux,
-                ))
-            }
-            Error::R1EncElg1Failed => {
-                let r1_dm = message.direct_message.deserialize::<Round1DirectMessage<P>>(format)?;
-                let r1_eb = message.echo_broadcast.deserialize::<Round1EchoBroadcast<P>>(format)?;
-
-                let public_aux = &associated_data.aux.as_map().try_get("aux infos", guilty_party)?;
-                let pk = public_aux.paillier_pk.clone().into_precomputed();
-                let rp = public_aux.rp_params.to_precomputed();
-
-                let aux = (&epid, guilty_party);
-
-                verify_that(!r1_dm.psi1.verify(
-                    EncElgPublicInputs {
-                        pk0: &pk,
-                        cap_c: &r1_eb.cap_g.to_precomputed(&pk),
-                        cap_a: &r1_eb.cap_y,
-                        cap_b: &r1_eb.cap_b1,
-                        cap_x: &r1_eb.cap_b2,
-                    },
-                    &rp,
-                    &aux,
-                ))
-            }
-            Error::R2WrongIdsD => {
-                let r2_nb = message
-                    .normal_broadcast
-                    .deserialize::<Round2NormalBroadcast<P, Id>>(format)?;
-                let expected_ids = associated_data
-                    .aux
-                    .as_map()
-                    .keys()
-                    .collect::<BTreeSet<_>>()
-                    .without(&guilty_party);
-                verify_that(r2_nb.cap_ds.keys().collect::<BTreeSet<_>>() != expected_ids)
-            }
-            Error::R2WrongIdsF => {
-                let r2_eb = message
-                    .echo_broadcast
-                    .deserialize::<Round2EchoBroadcast<P, Id>>(format)?;
-                let expected_ids = associated_data
-                    .aux
-                    .as_map()
-                    .keys()
-                    .collect::<BTreeSet<_>>()
-                    .without(&guilty_party);
-                verify_that(r2_eb.cap_fs.keys().collect::<BTreeSet<_>>() != expected_ids)
-            }
-            Error::R2WrongIdsPsi => {
-                let r2_nb = message
-                    .normal_broadcast
-                    .deserialize::<Round2NormalBroadcast<P, Id>>(format)?;
-                let expected_ids = associated_data
-                    .aux
-                    .as_map()
-                    .keys()
-                    .collect::<BTreeSet<_>>()
-                    .without(&guilty_party);
-                verify_that(r2_nb.psis.keys().collect::<BTreeSet<_>>() != expected_ids)
-            }
-            Error::R2AffGPsiFailed { failed_for } => {
-                let r1_eb = combined_echos
-                    .get_round(1)?
-                    .try_get("combined echos for Round 1", failed_for)?
-                    .deserialize::<Round1EchoBroadcast<P>>(format)?;
-                let r2_eb = message
-                    .echo_broadcast
-                    .deserialize::<Round2EchoBroadcast<P, Id>>(format)?;
-                let r2_nb = message
-                    .normal_broadcast
-                    .deserialize::<Round2NormalBroadcast<P, Id>>(format)?;
-
-                let failed_for_aux = &associated_data.aux.as_map().try_get("aux infos", failed_for)?;
-                let guilty_party_aux = &associated_data.aux.as_map().try_get("aux infos", guilty_party)?;
-
-                let rp = failed_for_aux.rp_params.to_precomputed();
-                let aux = (&epid, guilty_party);
-
-                let for_pk = failed_for_aux.paillier_pk.clone().into_precomputed();
-                let from_pk = guilty_party_aux.paillier_pk.clone().into_precomputed();
-
-                let cap_k = r1_eb.cap_k.to_precomputed(&for_pk);
-                let cap_d = r2_nb.cap_ds.safe_get("`D` map", failed_for)?.to_precomputed(&for_pk);
-                let cap_f = r2_eb.cap_fs.safe_get("`F` map", failed_for)?.to_precomputed(&from_pk);
-
-                let psi = r2_nb.psis.try_get("`psi` map", failed_for)?;
-                verify_that(!psi.verify(
-                    AffGPublicInputs {
-                        pk0: &for_pk,
-                        pk1: &from_pk,
-                        cap_c: &cap_k,
-                        cap_d: &cap_d,
-                        cap_y: &cap_f,
-                        cap_x: &r2_eb.cap_gamma,
-                    },
-                    &rp,
-                    &aux,
-                ))
-            }
-            Error::R2AffGHatPsiFailed { failed_for } => {
-                let r1_eb = combined_echos
-                    .get_round(1)?
-                    .try_get("combined echos for Round 1", failed_for)?
-                    .deserialize::<Round1EchoBroadcast<P>>(format)?;
-                let r2_eb = message
-                    .echo_broadcast
-                    .deserialize::<Round2EchoBroadcast<P, Id>>(format)?;
-                let r2_nb = message
-                    .normal_broadcast
-                    .deserialize::<Round2NormalBroadcast<P, Id>>(format)?;
-
-                let cap_x = associated_data.shares.as_map().try_get("shares", failed_for)?;
-
-                let failed_for_aux = &associated_data.aux.as_map().try_get("aux infos", failed_for)?;
-                let guilty_party_aux = &associated_data.aux.as_map().try_get("aux infos", guilty_party)?;
-
-                let rp = failed_for_aux.rp_params.to_precomputed();
-                let aux = (&epid, guilty_party);
-
-                let for_pk = failed_for_aux.paillier_pk.clone().into_precomputed();
-                let from_pk = guilty_party_aux.paillier_pk.clone().into_precomputed();
-
-                let cap_k = r1_eb.cap_k.to_precomputed(&for_pk);
-                let hat_cap_d = r2_nb
-                    .hat_cap_ds
-                    .safe_get("`\\hat{D}` map", failed_for)?
-                    .to_precomputed(&for_pk);
-                let hat_cap_f = r2_eb
-                    .hat_cap_fs
-                    .safe_get("`\\hat{F}` map", failed_for)?
-                    .to_precomputed(&from_pk);
-
-                let hat_psi = r2_nb.hat_psis.try_get("`\\hat{psi}` map", failed_for)?;
-                verify_that(!hat_psi.verify(
-                    AffGPublicInputs {
-                        pk0: &for_pk,
-                        pk1: &from_pk,
-                        cap_c: &cap_k,
-                        cap_d: &hat_cap_d,
-                        cap_y: &hat_cap_f,
-                        cap_x,
-                    },
-                    &rp,
-                    &aux,
-                ))
-            }
-            Error::R2ElogFailed => {
-                let r1_eb = previous_messages
-                    .get_round(1)?
-                    .echo_broadcast
-                    .deserialize::<Round1EchoBroadcast<P>>(format)?;
-                let r2_nb = message
-                    .normal_broadcast
-                    .deserialize::<Round2NormalBroadcast<P, Id>>(format)?;
-                let r2_eb = message
-                    .echo_broadcast
-                    .deserialize::<Round2EchoBroadcast<P, Id>>(format)?;
-                let aux = (&epid, guilty_party);
-
-                verify_that(!r2_nb.psi_elog.verify(
-                    ElogPublicInputs {
-                        cap_l: &r1_eb.cap_b1,
-                        cap_m: &r1_eb.cap_b2,
-                        cap_x: &r1_eb.cap_y,
-                        cap_y: &r2_eb.cap_gamma,
-                        h: &Point::generator(),
-                    },
-                    &aux,
-                ))
-            }
-            Error::R3ElogFailed => {
-                let r1_eb = previous_messages
-                    .get_round(1)?
-                    .echo_broadcast
-                    .deserialize::<Round1EchoBroadcast<P>>(format)?;
-                let r2_eb = previous_messages
-                    .get_round(2)?
-                    .echo_broadcast
-                    .deserialize::<Round2EchoBroadcast<P, Id>>(format)?;
-                let r3_nb = message
-                    .normal_broadcast
-                    .deserialize::<Round3NormalBroadcast<P>>(format)?;
-                let aux = (&epid, guilty_party);
-
-                verify_that(!r3_nb.psi_prime.verify(
-                    ElogPublicInputs {
-                        cap_l: &r1_eb.cap_a1,
-                        cap_m: &r1_eb.cap_a2,
-                        cap_x: &r1_eb.cap_y,
-                        cap_y: &r3_nb.cap_delta,
-                        h: &r2_eb.cap_gamma,
-                    },
-                    &aux,
-                ))
-            }
-            Error::R4InvalidSignatureShare => {
-                let r2_ebs = combined_echos
-                    .get_round(2)?
-                    .deserialize_all::<Round2EchoBroadcast<P, Id>>(format)?;
-                let r2_eb = previous_messages
-                    .get_round(2)?
-                    .echo_broadcast
-                    .deserialize::<Round2EchoBroadcast<P, Id>>(format)?;
-                let r3_nb = previous_messages
-                    .get_round(3)?
-                    .normal_broadcast
-                    .deserialize::<Round3NormalBroadcast<P>>(format)?;
-                let r3_ebs = combined_echos
-                    .get_round(3)?
-                    .deserialize_all::<Round3EchoBroadcast<P>>(format)?;
-                let r3_eb = previous_messages
-                    .get_round(3)?
-                    .echo_broadcast
-                    .deserialize::<Round3EchoBroadcast<P>>(format)?;
-                let r4_nb = message
-                    .normal_broadcast
-                    .deserialize::<Round4NormalBroadcast<P>>(format)?;
-
-                let cap_gamma = r2_eb.cap_gamma + r2_ebs.values().map(|eb| eb.cap_gamma).sum();
-                let nonce = cap_gamma.x_coordinate();
-                let delta = r3_eb.delta + r3_ebs.values().map(|eb| eb.delta).sum::<Scalar<P>>();
-                let delta_inv = Option::<Scalar<P>>::from(delta.invert())
-                    .ok_or_else(|| ProtocolValidationError::InvalidEvidence("`delta` is not invertible".into()))?;
-                let tilde_cap_delta = r3_nb.cap_delta * delta_inv;
-                let tilde_cap_s = r3_nb.cap_s * delta_inv;
-                let scalar_message = Scalar::from_reduced_bytes(associated_data.message.clone());
-
-                verify_that(cap_gamma * r4_nb.sigma != tilde_cap_delta * scalar_message + tilde_cap_s * nonce)
-            }
-            Error::R5DecFailed => {
-                let r1_eb = previous_messages
-                    .get_round(1)?
-                    .echo_broadcast
-                    .deserialize::<Round1EchoBroadcast<P>>(format)?;
-                let r2_ebs = combined_echos
-                    .get_round(2)?
-                    .deserialize_all::<Round2EchoBroadcast<P, Id>>(format)?;
-                let r2_nb = previous_messages
-                    .get_round(2)?
-                    .normal_broadcast
-                    .deserialize::<Round2NormalBroadcast<P, Id>>(format)?;
-                let r2_eb = previous_messages
-                    .get_round(2)?
-                    .echo_broadcast
-                    .deserialize::<Round2EchoBroadcast<P, Id>>(format)?;
-                let r3_nb = previous_messages
-                    .get_round(3)?
-                    .normal_broadcast
-                    .deserialize::<Round3NormalBroadcast<P>>(format)?;
-                let r5_eb = message
-                    .echo_broadcast
-                    .deserialize::<Round5EchoBroadcast<P, Id>>(format)?;
-
-                // Calculate `D_j` where `j = guilty_party`.
-                // `D_j = sum_{l != j}(D_{l,j} + F_{j,l})
-                //
-                // r2_eb: contains D_{l,j}, F_{l,j} for l != j
-                // => D_{l,j} = r2_eb.cap_ds[l]
-                // r2_ebs[i], i != j: contains D_{l,i}, F_{l,i} for l != i
-                // => F_{j,l} = r2_ebs[l].cap_fs[j]
-
-                let public_aux = &associated_data.aux.as_map().try_get("aux infos", guilty_party)?;
-                let pk = public_aux.paillier_pk.clone().into_precomputed();
-                let rp = public_aux.rp_params.to_precomputed();
-                let aux = (&epid, guilty_party);
-
-                let ids = associated_data
-                    .aux
-                    .as_map()
-                    .keys()
-                    .collect::<BTreeSet<_>>()
-                    .without(&guilty_party);
-
-                let cap_d = sum_non_empty(
-                    ids.iter()
-                        .map(|id| Ok(r2_nb.cap_ds.try_get("`D` map", id)?.to_precomputed(&pk))),
-                    ProtocolValidationError::InvalidEvidence("There must be at least two parties".into()),
-                )? + sum_non_empty(
-                    ids.iter().map(|id| {
-                        Ok(r2_ebs
-                            .try_get("Round 2 echo broadcasts", id)?
-                            .cap_fs
-                            .try_get("`F` map", guilty_party)?
-                            .to_precomputed(&pk))
-                    }),
-                    ProtocolValidationError::InvalidEvidence("There must be at least two parties".into()),
-                )?;
-
-                let cap_k = r1_eb.cap_k.to_precomputed(&pk);
-
-                verify_that(!r5_eb.psi_star.verify(
-                    DecPublicInputs {
-                        pk0: &pk,
-                        cap_k: &cap_k,
-                        cap_x: &r2_eb.cap_gamma,
-                        cap_d: &cap_d,
-                        cap_s: &r3_nb.cap_delta,
-                        cap_g: &Point::generator(),
-                        num_parties: associated_data.aux.num_parties(),
-                    },
-                    &rp,
-                    &aux,
-                ))
-            }
-            Error::R5WrongIdsPsi => {
-                // TODO (#188): currently unreachable from tests
-                let r5_nb = message
-                    .normal_broadcast
-                    .deserialize::<Round5EchoBroadcast<P, Id>>(format)?;
-                let expected_ids = associated_data
-                    .aux
-                    .as_map()
-                    .keys()
-                    .collect::<BTreeSet<_>>()
-                    .without(&guilty_party);
-                verify_that(r5_nb.psis.keys().collect::<BTreeSet<_>>() != expected_ids)
-            }
-            Error::R5AffGStarFailed { failed_for } => {
-                // TODO (#188): currently unreachable from tests
-                let r1_ebs = combined_echos
-                    .get_round(1)?
-                    .deserialize_all::<Round1EchoBroadcast<P>>(format)?;
-                let r2_ebs = combined_echos
-                    .get_round(2)?
-                    .deserialize_all::<Round2EchoBroadcast<P, Id>>(format)?;
-                let r2_nb = previous_messages
-                    .get_round(2)?
-                    .normal_broadcast
-                    .deserialize::<Round2NormalBroadcast<P, Id>>(format)?;
-                let r2_eb = previous_messages
-                    .get_round(2)?
-                    .echo_broadcast
-                    .deserialize::<Round2EchoBroadcast<P, Id>>(format)?;
-                let r5_eb = message
-                    .echo_broadcast
-                    .deserialize::<Round5EchoBroadcast<P, Id>>(format)?;
-
-                let failed_for_aux = &associated_data.aux.as_map().try_get("aux infos", failed_for)?;
-                let guilty_party_aux = &associated_data.aux.as_map().try_get("aux infos", guilty_party)?;
-
-                let failed_for_pk = failed_for_aux.paillier_pk.clone().into_precomputed();
-
-                let guilty_party_pk = guilty_party_aux.paillier_pk.clone().into_precomputed();
-                let aux = (&epid, guilty_party);
-
-                // l = failed_for
-                // j = guilty_party
-                // i = reported_by
-
-                let cap_d = r2_nb
-                    .cap_ds
-                    .try_get("`D` map", failed_for)?
-                    .to_precomputed(&failed_for_pk);
-                let cap_k = r1_ebs
-                    .try_get("Round 1 echo broadcasts", failed_for)?
-                    .cap_k
-                    .to_precomputed(&failed_for_pk);
-                let cap_f = r2_ebs
-                    .try_get("Round 2 echo broadcasts", failed_for)?
-                    .cap_fs
-                    .try_get("`F` map", guilty_party)?
-                    .to_precomputed(&guilty_party_pk);
-
-                let psi = r5_eb.psis.try_get("`\\{psi}` map", failed_for)?;
-
-                verify_that(!psi.verify(
-                    AffGStarPublicInputs {
-                        pk0: &guilty_party_pk,
-                        pk1: &failed_for_pk,
-                        cap_c: &cap_d,
-                        cap_d: &cap_k,
-                        cap_y: &cap_f,
-                        cap_x: &r2_eb.cap_gamma,
-                    },
-                    &aux,
-                ))
-            }
-            Error::R6DecFailed => {
-                let r1_eb = previous_messages
-                    .get_round(1)?
-                    .echo_broadcast
-                    .deserialize::<Round1EchoBroadcast<P>>(format)?;
-                let r2_ebs = combined_echos
-                    .get_round(2)?
-                    .deserialize_all::<Round2EchoBroadcast<P, Id>>(format)?;
-                let r2_nb = previous_messages
-                    .get_round(2)?
-                    .normal_broadcast
-                    .deserialize::<Round2NormalBroadcast<P, Id>>(format)?;
-                let r2_eb = previous_messages
-                    .get_round(2)?
-                    .echo_broadcast
-                    .deserialize::<Round2EchoBroadcast<P, Id>>(format)?;
-                let r3_nb = previous_messages
-                    .get_round(3)?
-                    .normal_broadcast
-                    .deserialize::<Round3NormalBroadcast<P>>(format)?;
-                let r5_eb = message
-                    .echo_broadcast
-                    .deserialize::<Round5EchoBroadcast<P, Id>>(format)?;
-
-                // Calculate `\hat{D}_j` where `j = guilty_party`.
-                // `\hat{D}_j = sum_{l != j}(\hat{D}_{l,j} + \hat{F}_{j,l})
-                //
-                // r2_eb: contains \hat{D}_{l,j}, \hat{F}_{l,j} for l != j
-                // => \hat{D}_{l,j} = r2_eb.hat_cap_ds[l]
-                // r2_ebs[i], i != j: contains \hat{D}_{l,i}, \hat{F}_{l,i} for l != i
-                // => \hat{F}_{j,l} = r2_ebs[l].hat_cap_fs[j]
-
-                let public_aux = &associated_data.aux.as_map().try_get("aux infos", guilty_party)?;
-                let pk = public_aux.paillier_pk.clone().into_precomputed();
-                let rp = public_aux.rp_params.to_precomputed();
-                let aux = (&epid, guilty_party);
-
-                let ids = associated_data
-                    .aux
-                    .as_map()
-                    .keys()
-                    .collect::<BTreeSet<_>>()
-                    .without(&guilty_party);
-
-                let hat_cap_d = sum_non_empty(
-                    ids.iter()
-                        .map(|id| Ok(r2_nb.hat_cap_ds.try_get("`\\hat{D}` map", id)?.to_precomputed(&pk))),
-                    ProtocolValidationError::InvalidEvidence("There must be at least two parties".into()),
-                )? + sum_non_empty(
-                    ids.iter().map(|id| {
-                        Ok(r2_ebs
-                            .try_get("Round 2 echo broadcasts", id)?
-                            .hat_cap_fs
-                            .try_get("`\\hat{F}` map", guilty_party)?
-                            .to_precomputed(&pk))
-                    }),
-                    ProtocolValidationError::InvalidEvidence("There must be at least two parties".into()),
-                )?;
-
-                let cap_k = r1_eb.cap_k.to_precomputed(&pk);
-
-                let total_cap_gamma = r2_eb.cap_gamma + r2_ebs.values().map(|eb| eb.cap_gamma).sum();
-
-                let cap_x = associated_data.shares.as_map().try_get("`X` map", guilty_party)?;
-
-                verify_that(!r5_eb.psi_star.verify(
-                    DecPublicInputs {
-                        pk0: &pk,
-                        cap_k: &cap_k,
-                        cap_x,
-                        cap_d: &hat_cap_d,
-                        cap_s: &r3_nb.cap_s,
-                        cap_g: &total_cap_gamma,
-                        num_parties: associated_data.aux.num_parties(),
-                    },
-                    &rp,
-                    &aux,
-                ))
-            }
-            Error::R6WrongIdsPsi => {
-                // TODO (#188): currently unreachable from tests
-                let r6_nb = message
-                    .normal_broadcast
-                    .deserialize::<Round6EchoBroadcast<P, Id>>(format)?;
-                let expected_ids = associated_data
-                    .aux
-                    .as_map()
-                    .keys()
-                    .collect::<BTreeSet<_>>()
-                    .without(&guilty_party);
-                verify_that(r6_nb.hat_psis.keys().collect::<BTreeSet<_>>() != expected_ids)
-            }
-            Error::R6AffGStarFailed { failed_for } => {
-                // TODO (#188): currently unreachable from tests
-                let r1_ebs = combined_echos
-                    .get_round(1)?
-                    .deserialize_all::<Round1EchoBroadcast<P>>(format)?;
-                let r2_ebs = combined_echos
-                    .get_round(2)?
-                    .deserialize_all::<Round2EchoBroadcast<P, Id>>(format)?;
-                let r2_nb = previous_messages
-                    .get_round(2)?
-                    .normal_broadcast
-                    .deserialize::<Round2NormalBroadcast<P, Id>>(format)?;
-                let r6_eb = message
-                    .echo_broadcast
-                    .deserialize::<Round6EchoBroadcast<P, Id>>(format)?;
-
-                let failed_for_aux = &associated_data.aux.as_map().try_get("aux infos", failed_for)?;
-                let guilty_party_aux = &associated_data.aux.as_map().try_get("aux infos", guilty_party)?;
-
-                let failed_for_pk = failed_for_aux.paillier_pk.clone().into_precomputed();
-
-                let guilty_party_pk = guilty_party_aux.paillier_pk.clone().into_precomputed();
-                let aux = (&epid, guilty_party);
-
-                let cap_x = associated_data.shares.as_map().try_get("shares", failed_for)?;
-
-                // l = failed_for
-                // j = guilty_party
-                // i = reported_by
-
-                let hat_cap_d = r2_nb
-                    .hat_cap_ds
-                    .try_get("`\\hat{D}` map", failed_for)?
-                    .to_precomputed(&failed_for_pk);
-                let cap_k = r1_ebs
-                    .try_get("Round 1 echo broadcasts", failed_for)?
-                    .cap_k
-                    .to_precomputed(&failed_for_pk);
-                let hat_cap_f = r2_ebs
-                    .try_get("Round 2 echo broadcasts", failed_for)?
-                    .hat_cap_fs
-                    .try_get("`\\hat{F}` map", guilty_party)?
-                    .to_precomputed(&guilty_party_pk);
-
-                let hat_psi = r6_eb.hat_psis.try_get("`\\hat{\\psi}` map", failed_for)?;
-
-                verify_that(!hat_psi.verify(
-                    AffGStarPublicInputs {
-                        pk0: &guilty_party_pk,
-                        pk1: &failed_for_pk,
-                        cap_c: &hat_cap_d,
-                        cap_d: &cap_k,
-                        cap_y: &hat_cap_f,
-                        cap_x,
-                    },
-                    &aux,
-                ))
-            }
-        }
     }
 }
 
@@ -967,7 +1081,7 @@ impl<P: SchemeParams, Id: PartyId> EntryPoint<Id> for InteractiveSigning<P, Id> 
 
     fn make_round(
         self,
-        rng: &mut dyn CryptoRngCore,
+        rng: &mut impl CryptoRngCore,
         shared_randomness: &[u8],
         id: &Id,
     ) -> Result<BoxedRound<Id, Self::Protocol>, LocalError> {
@@ -985,7 +1099,7 @@ impl<P: SchemeParams, Id: PartyId> EntryPoint<Id> for InteractiveSigning<P, Id> 
 
         let epid = Epid::new::<P, Id>(
             shared_randomness,
-            &InteractiveSigningAssociatedData {
+            &InteractiveSigningSharedData {
                 shares: key_share.public().clone(),
                 aux: aux_info.public().clone(),
                 message: self.message.clone(),
@@ -1027,7 +1141,7 @@ impl<P: SchemeParams, Id: PartyId> EntryPoint<Id> for InteractiveSigning<P, Id> 
             cap_b2,
         };
 
-        Ok(BoxedRound::new_dynamic(Round1 {
+        Ok(BoxedRound::new(Round1 {
             context: Context {
                 scalar_message: Scalar::from_reduced_bytes(self.message),
                 epid,
@@ -1075,16 +1189,16 @@ where
     Id: PartyId,
 {
     pub fn public_share(&self, i: &Id) -> Result<&Point<P>, LocalError> {
-        self.key_share.public_shares().safe_get("public share", i)
+        self.key_share.public_shares().get_or_local_error("public share", i)
     }
 
     pub fn public_aux(&self, i: &Id) -> Result<&PublicAuxInfoPrecomputed<P>, LocalError> {
-        self.aux_info.public_aux.safe_get("public aux", i)
+        self.aux_info.public_aux.get_or_local_error("public aux", i)
     }
 }
 
 #[derive(Debug)]
-struct Round1<P, Id>
+pub(super) struct Round1<P, Id>
 where
     P: SchemeParams,
     Id: PartyId,
@@ -1107,7 +1221,7 @@ pub(super) struct Round1EchoBroadcast<P: SchemeParams> {
 
 #[derive(Clone)]
 #[derive_where::derive_where(Serialize, Deserialize)]
-struct Round1DirectMessage<P: SchemeParams> {
+pub(super) struct Round1DirectMessage<P: SchemeParams> {
     psi0: EncElgProof<P>,
     psi1: EncElgProof<P>,
 }
@@ -1125,6 +1239,15 @@ pub(super) struct Round1Payload<P: SchemeParams> {
 impl<P: SchemeParams, Id: PartyId> Round<Id> for Round1<P, Id> {
     type Protocol = InteractiveSigningProtocol<P, Id>;
 
+    type DirectMessage = Round1DirectMessage<P>;
+    type NormalBroadcast = NoMessage;
+    type EchoBroadcast = Round1EchoBroadcast<P>;
+
+    type Payload = Round1Payload<P>;
+    type Artifact = ();
+
+    type ProtocolError = R1Error<P, Id>;
+
     fn transition_info(&self) -> TransitionInfo {
         TransitionInfo::new_linear(1)
     }
@@ -1133,20 +1256,16 @@ impl<P: SchemeParams, Id: PartyId> Round<Id> for Round1<P, Id> {
         CommunicationInfo::regular(&self.context.other_ids)
     }
 
-    fn make_echo_broadcast(
-        &self,
-        _rng: &mut dyn CryptoRngCore,
-        format: &BoxedFormat,
-    ) -> Result<EchoBroadcast, LocalError> {
-        EchoBroadcast::new(format, self.r1_echo_broadcast.clone())
+    fn make_echo_broadcast(&self, _rng: &mut impl CryptoRngCore) -> Result<Self::EchoBroadcast, LocalError> {
+        Ok(self.r1_echo_broadcast.clone())
     }
 
     fn make_direct_message(
         &self,
-        rng: &mut dyn CryptoRngCore,
-        format: &BoxedFormat,
+        rng: &mut impl CryptoRngCore,
+
         destination: &Id,
-    ) -> Result<(DirectMessage, Option<Artifact>), LocalError> {
+    ) -> Result<(Self::DirectMessage, Self::Artifact), LocalError> {
         let aux = (&self.context.epid, &self.context.my_id);
         let pk = self.context.aux_info.secret_aux.paillier_sk.public_key();
 
@@ -1170,7 +1289,7 @@ impl<P: SchemeParams, Id: PartyId> Round<Id> for Round1<P, Id> {
                 .context
                 .aux_info
                 .public_aux
-                .safe_get("public aux", destination)?
+                .get_or_local_error("public aux", destination)?
                 .rp_params,
             &aux,
         );
@@ -1193,27 +1312,22 @@ impl<P: SchemeParams, Id: PartyId> Round<Id> for Round1<P, Id> {
                 .context
                 .aux_info
                 .public_aux
-                .safe_get("public aux", destination)?
+                .get_or_local_error("public aux", destination)?
                 .rp_params,
             &aux,
         );
 
-        Ok((
-            DirectMessage::new(format, Round1DirectMessage::<P> { psi0, psi1 })?,
-            None,
-        ))
+        Ok((Round1DirectMessage::<P> { psi0, psi1 }, ()))
     }
 
     fn receive_message(
         &self,
-        format: &BoxedFormat,
-        from: &Id,
-        message: ProtocolMessage,
-    ) -> Result<Payload, ReceiveError<Id, Self::Protocol>> {
-        message.normal_broadcast.assert_is_none()?;
 
-        let direct_message = message.direct_message.deserialize::<Round1DirectMessage<P>>(format)?;
-        let echo_broadcast = message.echo_broadcast.deserialize::<Round1EchoBroadcast<P>>(format)?;
+        from: &Id,
+        message: ProtocolMessage<Id, Self>,
+    ) -> Result<Self::Payload, ReceiveError<Id, Self>> {
+        let direct_message = message.direct_message;
+        let echo_broadcast = message.echo_broadcast;
 
         let aux = (&self.context.epid, from);
 
@@ -1235,7 +1349,10 @@ impl<P: SchemeParams, Id: PartyId> Round<Id> for Round1<P, Id> {
             &public_aux.rp_params,
             &aux,
         ) {
-            return Err(ReceiveError::protocol(Error::R1EncElg0Failed.into()));
+            return Err(ReceiveError::Protocol(R1Error {
+                error: R1ErrorEnum::EncElg0Failed,
+                phantom: PhantomData,
+            }));
         }
 
         if !direct_message.psi1.verify(
@@ -1249,26 +1366,29 @@ impl<P: SchemeParams, Id: PartyId> Round<Id> for Round1<P, Id> {
             &public_aux.rp_params,
             &aux,
         ) {
-            return Err(ReceiveError::protocol(Error::R1EncElg1Failed.into()));
+            return Err(ReceiveError::Protocol(R1Error {
+                error: R1ErrorEnum::EncElg1Failed,
+                phantom: PhantomData,
+            }));
         }
 
-        Ok(Payload::new(Round1Payload::<P> {
+        Ok(Round1Payload::<P> {
             cap_k,
             cap_a1: echo_broadcast.cap_a1,
             cap_a2: echo_broadcast.cap_a2,
             cap_b1: echo_broadcast.cap_b1,
             cap_b2: echo_broadcast.cap_b2,
             cap_y: echo_broadcast.cap_y,
-        }))
+        })
     }
 
     fn finalize(
-        self: Box<Self>,
-        rng: &mut dyn CryptoRngCore,
-        payloads: BTreeMap<Id, Payload>,
-        _artifacts: BTreeMap<Id, Artifact>,
+        self,
+        rng: &mut impl CryptoRngCore,
+        payloads: BTreeMap<Id, Self::Payload>,
+        _artifacts: BTreeMap<Id, Self::Artifact>,
     ) -> Result<FinalizeOutcome<Id, Self::Protocol>, LocalError> {
-        let mut payloads = payloads.downcast_all::<Round1Payload<P>>()?;
+        let mut payloads = payloads;
 
         let pk = self.context.aux_info.secret_aux.paillier_sk.public_key();
         let my_payload = Round1Payload {
@@ -1358,12 +1478,12 @@ impl<P: SchemeParams, Id: PartyId> Round<Id> for Round1<P, Id> {
 
         for id in self.context.other_ids.iter() {
             let rp = &self.context.public_aux(id)?.rp_params;
-            let r1_payload = payloads.safe_get("Round 1 payloads", id)?;
+            let r1_payload = payloads.get_or_local_error("Round 1 payloads", id)?;
             let target_pk = &self.context.public_aux(id)?.paillier_pk;
 
-            let beta = betas.safe_get("`beta` map", id)?;
-            let r = rs.safe_get("`r` map", id)?;
-            let s = ss.safe_get("`s` map", id)?;
+            let beta = betas.get_or_local_error("`beta` map", id)?;
+            let r = rs.get_or_local_error("`r` map", id)?;
+            let s = ss.get_or_local_error("`s` map", id)?;
 
             let cap_f = Ciphertext::new_with_randomizer(pk, beta, r);
             let cap_d = &r1_payload.cap_k * &gamma + Ciphertext::new_with_randomizer(target_pk, &-beta, s);
@@ -1387,9 +1507,9 @@ impl<P: SchemeParams, Id: PartyId> Round<Id> for Round1<P, Id> {
                 &aux,
             );
 
-            let hat_beta = hat_betas.safe_get("`\\hat{beta}` map", id)?;
-            let hat_r = hat_rs.safe_get("`\\hat{r}` map", id)?;
-            let hat_s = hat_ss.safe_get("`\\hat{s}` map", id)?;
+            let hat_beta = hat_betas.get_or_local_error("`\\hat{beta}` map", id)?;
+            let hat_r = hat_rs.get_or_local_error("`\\hat{r}` map", id)?;
+            let hat_s = hat_ss.get_or_local_error("`\\hat{s}` map", id)?;
 
             let hat_cap_f = Ciphertext::new_with_randomizer(pk, hat_beta, hat_r);
             let hat_cap_d = &r1_payload.cap_k * &x + Ciphertext::new_with_randomizer(target_pk, &-hat_beta, hat_s);
@@ -1442,7 +1562,7 @@ impl<P: SchemeParams, Id: PartyId> Round<Id> for Round1<P, Id> {
             hat_psis,
         };
 
-        Ok(FinalizeOutcome::AnotherRound(BoxedRound::new_dynamic(next_round)))
+        Ok(FinalizeOutcome::AnotherRound(BoxedRound::new(next_round)))
     }
 }
 
@@ -1485,7 +1605,7 @@ pub(super) struct Round2EchoBroadcast<P: SchemeParams, Id: PartyId> {
     pub(super) hat_cap_fs: SerializableMap<Id, CiphertextWire<P::Paillier>>,
 }
 
-struct Round2Payload<P: SchemeParams, Id: PartyId> {
+pub(super) struct Round2Payload<P: SchemeParams, Id: PartyId> {
     cap_gamma: Point<P>,
     alpha: Secret<Scalar<P>>,
     hat_alpha: Secret<Scalar<P>>,
@@ -1498,6 +1618,15 @@ struct Round2Payload<P: SchemeParams, Id: PartyId> {
 impl<P: SchemeParams, Id: PartyId> Round<Id> for Round2<P, Id> {
     type Protocol = InteractiveSigningProtocol<P, Id>;
 
+    type DirectMessage = NoMessage;
+    type NormalBroadcast = Round2NormalBroadcast<P, Id>;
+    type EchoBroadcast = Round2EchoBroadcast<P, Id>;
+
+    type Payload = Round2Payload<P, Id>;
+    type Artifact = NoArtifact;
+
+    type ProtocolError = R2Error<P, Id>;
+
     fn transition_info(&self) -> TransitionInfo {
         TransitionInfo::new_linear(2)
     }
@@ -1506,51 +1635,32 @@ impl<P: SchemeParams, Id: PartyId> Round<Id> for Round2<P, Id> {
         CommunicationInfo::regular(&self.context.other_ids)
     }
 
-    fn make_normal_broadcast(
-        &self,
-        _rng: &mut dyn CryptoRngCore,
-        format: &BoxedFormat,
-    ) -> Result<NormalBroadcast, LocalError> {
-        NormalBroadcast::new(
-            format,
-            Round2NormalBroadcast::<P, Id> {
-                cap_ds: self.cap_ds.map_values_ref(|cap_d| cap_d.to_wire()).into(),
-                hat_cap_ds: self.hat_cap_ds.map_values_ref(|hat_cap_d| hat_cap_d.to_wire()).into(),
-                psi_elog: self.psi_elog.clone(),
-                psis: self.psis.clone().into(),
-                hat_psis: self.hat_psis.clone().into(),
-            },
-        )
+    fn make_normal_broadcast(&self, _rng: &mut impl CryptoRngCore) -> Result<Self::NormalBroadcast, LocalError> {
+        Ok(Round2NormalBroadcast::<P, Id> {
+            cap_ds: self.cap_ds.map_values_ref(|cap_d| cap_d.to_wire()).into(),
+            hat_cap_ds: self.hat_cap_ds.map_values_ref(|hat_cap_d| hat_cap_d.to_wire()).into(),
+            psi_elog: self.psi_elog.clone(),
+            psis: self.psis.clone().into(),
+            hat_psis: self.hat_psis.clone().into(),
+        })
     }
 
-    fn make_echo_broadcast(
-        &self,
-        _rng: &mut dyn CryptoRngCore,
-        format: &BoxedFormat,
-    ) -> Result<EchoBroadcast, LocalError> {
-        EchoBroadcast::new(
-            format,
-            Round2EchoBroadcast::<P, Id> {
-                cap_gamma: self.cap_gamma,
-                cap_fs: self.cap_fs.map_values_ref(|cap_f| cap_f.to_wire()).into(),
-                hat_cap_fs: self.hat_cap_fs.map_values_ref(|hat_cap_f| hat_cap_f.to_wire()).into(),
-            },
-        )
+    fn make_echo_broadcast(&self, _rng: &mut impl CryptoRngCore) -> Result<Self::EchoBroadcast, LocalError> {
+        Ok(Round2EchoBroadcast::<P, Id> {
+            cap_gamma: self.cap_gamma,
+            cap_fs: self.cap_fs.map_values_ref(|cap_f| cap_f.to_wire()).into(),
+            hat_cap_fs: self.hat_cap_fs.map_values_ref(|hat_cap_f| hat_cap_f.to_wire()).into(),
+        })
     }
 
     fn receive_message(
         &self,
-        format: &BoxedFormat,
+
         from: &Id,
-        message: ProtocolMessage,
-    ) -> Result<Payload, ReceiveError<Id, Self::Protocol>> {
-        let echo_broadcast = message
-            .echo_broadcast
-            .deserialize::<Round2EchoBroadcast<P, Id>>(format)?;
-        let normal_broadcast = message
-            .normal_broadcast
-            .deserialize::<Round2NormalBroadcast<P, Id>>(format)?;
-        message.direct_message.assert_is_none()?;
+        message: ProtocolMessage<Id, Self>,
+    ) -> Result<Self::Payload, ReceiveError<Id, Self>> {
+        let echo_broadcast = message.echo_broadcast;
+        let normal_broadcast = message.normal_broadcast;
 
         let aux = (&self.context.epid, from);
         let from_pk = &self.context.public_aux(from)?.paillier_pk;
@@ -1558,27 +1668,42 @@ impl<P: SchemeParams, Id: PartyId> Round<Id> for Round2<P, Id> {
         let expected_ids = self.context.all_ids.clone().without(from);
 
         if normal_broadcast.cap_ds.keys().cloned().collect::<BTreeSet<_>>() != expected_ids {
-            return Err(ReceiveError::protocol(Error::R2WrongIdsD.into()));
+            return Err(ReceiveError::Protocol(R2Error {
+                error: R2ErrorEnum::WrongIdsD,
+                phantom: PhantomData,
+            }));
         }
 
         if echo_broadcast.cap_fs.keys().cloned().collect::<BTreeSet<_>>() != expected_ids {
-            return Err(ReceiveError::protocol(Error::R2WrongIdsF.into()));
+            return Err(ReceiveError::Protocol(R2Error {
+                error: R2ErrorEnum::WrongIdsF,
+                phantom: PhantomData,
+            }));
         }
 
         if normal_broadcast.psis.keys().cloned().collect::<BTreeSet<_>>() != expected_ids {
-            return Err(ReceiveError::protocol(Error::R2WrongIdsPsi.into()));
+            return Err(ReceiveError::Protocol(R2Error {
+                error: R2ErrorEnum::WrongIdsPsi,
+                phantom: PhantomData,
+            }));
         }
 
-        let sender_payload = self.r1_payloads.safe_get("Round 1 payloads", from)?;
+        let sender_payload = self.r1_payloads.get_or_local_error("Round 1 payloads", from)?;
 
         let mut cap_ds = BTreeMap::new();
         let mut cap_fs = BTreeMap::new();
         for (id, psi) in normal_broadcast.psis.iter() {
             let rp = &self.context.public_aux(id)?.rp_params;
             let for_pk = &self.context.public_aux(id)?.paillier_pk;
-            let for_payload = self.r1_payloads.safe_get("Round 1 payloads", id)?;
-            let cap_d = normal_broadcast.cap_ds.safe_get("`D` map", id)?.to_precomputed(for_pk);
-            let cap_f = echo_broadcast.cap_fs.safe_get("`F` map", id)?.to_precomputed(from_pk);
+            let for_payload = self.r1_payloads.get_or_local_error("Round 1 payloads", id)?;
+            let cap_d = normal_broadcast
+                .cap_ds
+                .get_or_local_error("`D` map", id)?
+                .to_precomputed(for_pk);
+            let cap_f = echo_broadcast
+                .cap_fs
+                .get_or_local_error("`F` map", id)?
+                .to_precomputed(from_pk);
 
             if !psi.verify(
                 AffGPublicInputs {
@@ -1592,9 +1717,10 @@ impl<P: SchemeParams, Id: PartyId> Round<Id> for Round2<P, Id> {
                 rp,
                 &aux,
             ) {
-                return Err(ReceiveError::protocol(
-                    Error::R2AffGPsiFailed { failed_for: id.clone() }.into(),
-                ));
+                return Err(ReceiveError::Protocol(R2Error {
+                    error: R2ErrorEnum::AffGPsiFailed { failed_for: id.clone() },
+                    phantom: PhantomData,
+                }));
             }
 
             cap_ds.insert(id.clone(), cap_d);
@@ -1606,14 +1732,14 @@ impl<P: SchemeParams, Id: PartyId> Round<Id> for Round2<P, Id> {
         for (id, hat_psi) in normal_broadcast.hat_psis.iter() {
             let rp = &self.context.public_aux(id)?.rp_params;
             let for_pk = &self.context.public_aux(id)?.paillier_pk;
-            let for_payload = self.r1_payloads.safe_get("Round 1 payloads", id)?;
+            let for_payload = self.r1_payloads.get_or_local_error("Round 1 payloads", id)?;
             let hat_cap_d = normal_broadcast
                 .hat_cap_ds
-                .safe_get("`D` map", id)?
+                .get_or_local_error("`D` map", id)?
                 .to_precomputed(for_pk);
             let hat_cap_f = echo_broadcast
                 .hat_cap_fs
-                .safe_get("`F` map", id)?
+                .get_or_local_error("`F` map", id)?
                 .to_precomputed(from_pk);
 
             let cap_x = self.context.public_share(from)?;
@@ -1630,9 +1756,10 @@ impl<P: SchemeParams, Id: PartyId> Round<Id> for Round2<P, Id> {
                 rp,
                 &aux,
             ) {
-                return Err(ReceiveError::protocol(
-                    Error::R2AffGHatPsiFailed { failed_for: id.clone() }.into(),
-                ));
+                return Err(ReceiveError::Protocol(R2Error {
+                    error: R2ErrorEnum::AffGHatPsiFailed { failed_for: id.clone() },
+                    phantom: PhantomData,
+                }));
             }
 
             hat_cap_ds.insert(id.clone(), hat_cap_d);
@@ -1649,20 +1776,23 @@ impl<P: SchemeParams, Id: PartyId> Round<Id> for Round2<P, Id> {
             },
             &aux,
         ) {
-            return Err(ReceiveError::protocol(Error::R2ElogFailed.into()));
+            return Err(ReceiveError::Protocol(R2Error {
+                error: R2ErrorEnum::ElogFailed,
+                phantom: PhantomData,
+            }));
         }
 
         let alpha_uint = cap_ds
-            .safe_get("`D` map", &self.context.my_id)?
+            .get_or_local_error("`D` map", &self.context.my_id)?
             .decrypt(&self.context.aux_info.secret_aux.paillier_sk);
         let hat_alpha_uint = hat_cap_ds
-            .safe_get("`\\hat{D}` map", &self.context.my_id)?
+            .get_or_local_error("`\\hat{D}` map", &self.context.my_id)?
             .decrypt(&self.context.aux_info.secret_aux.paillier_sk);
 
         let alpha = secret_scalar_from_signed::<P>(&alpha_uint);
         let hat_alpha = secret_scalar_from_signed::<P>(&hat_alpha_uint);
 
-        Ok(Payload::new(Round2Payload::<P, Id> {
+        Ok(Round2Payload::<P, Id> {
             cap_gamma: echo_broadcast.cap_gamma,
             alpha,
             hat_alpha,
@@ -1670,17 +1800,15 @@ impl<P: SchemeParams, Id: PartyId> Round<Id> for Round2<P, Id> {
             cap_fs,
             hat_cap_ds,
             hat_cap_fs,
-        }))
+        })
     }
 
     fn finalize(
-        self: Box<Self>,
-        rng: &mut dyn CryptoRngCore,
-        payloads: BTreeMap<Id, Payload>,
-        _artifacts: BTreeMap<Id, Artifact>,
+        self,
+        rng: &mut impl CryptoRngCore,
+        payloads: BTreeMap<Id, Self::Payload>,
+        _artifacts: BTreeMap<Id, Self::Artifact>,
     ) -> Result<FinalizeOutcome<Id, Self::Protocol>, LocalError> {
-        let payloads = payloads.downcast_all::<Round2Payload<P, Id>>()?;
-
         let mut cap_gammas = payloads.map_values_ref(|payload| payload.cap_gamma);
         cap_gammas.insert(self.context.my_id.clone(), self.cap_gamma);
 
@@ -1700,7 +1828,9 @@ impl<P: SchemeParams, Id: PartyId> Round<Id> for Round2<P, Id> {
         let cap_s = cap_gamma_combined * &chi;
 
         let aux = (&self.context.epid, &self.context.my_id);
-        let my_r1_payload = self.r1_payloads.safe_get("Round 1 payloads", &self.context.my_id)?;
+        let my_r1_payload = self
+            .r1_payloads
+            .get_or_local_error("Round 1 payloads", &self.context.my_id)?;
         let psi_prime = ElogProof::new(
             rng,
             ElogSecretInputs {
@@ -1795,7 +1925,7 @@ impl<P: SchemeParams, Id: PartyId> Round<Id> for Round2<P, Id> {
             hat_ss: self.hat_ss,
         };
 
-        Ok(FinalizeOutcome::AnotherRound(BoxedRound::new_dynamic(next_round)))
+        Ok(FinalizeOutcome::AnotherRound(BoxedRound::new(next_round)))
     }
 }
 
@@ -1844,6 +1974,15 @@ pub(super) struct Round3Payload<P: SchemeParams> {
 impl<P: SchemeParams, Id: PartyId> Round<Id> for Round3<P, Id> {
     type Protocol = InteractiveSigningProtocol<P, Id>;
 
+    type DirectMessage = NoMessage;
+    type NormalBroadcast = Round3NormalBroadcast<P>;
+    type EchoBroadcast = Round3EchoBroadcast<P>;
+
+    type Payload = Round3Payload<P>;
+    type Artifact = NoArtifact;
+
+    type ProtocolError = R3Error<P, Id>;
+
     fn transition_info(&self) -> TransitionInfo {
         TransitionInfo::new_linear(3).with_children([5, 6].into())
     }
@@ -1852,36 +1991,25 @@ impl<P: SchemeParams, Id: PartyId> Round<Id> for Round3<P, Id> {
         CommunicationInfo::regular(&self.context.other_ids)
     }
 
-    fn make_echo_broadcast(
-        &self,
-        _rng: &mut dyn CryptoRngCore,
-        format: &BoxedFormat,
-    ) -> Result<EchoBroadcast, LocalError> {
-        EchoBroadcast::new(format, self.r3_echo_broadcast.clone())
+    fn make_echo_broadcast(&self, _rng: &mut impl CryptoRngCore) -> Result<Self::EchoBroadcast, LocalError> {
+        Ok(self.r3_echo_broadcast.clone())
     }
 
-    fn make_normal_broadcast(
-        &self,
-        _rng: &mut dyn CryptoRngCore,
-        format: &BoxedFormat,
-    ) -> Result<NormalBroadcast, LocalError> {
-        NormalBroadcast::new(format, self.r3_normal_broadcast.clone())
+    fn make_normal_broadcast(&self, _rng: &mut impl CryptoRngCore) -> Result<Self::NormalBroadcast, LocalError> {
+        Ok(self.r3_normal_broadcast.clone())
     }
 
     fn receive_message(
         &self,
-        format: &BoxedFormat,
+
         from: &Id,
-        message: ProtocolMessage,
-    ) -> Result<Payload, ReceiveError<Id, Self::Protocol>> {
-        message.direct_message.assert_is_none()?;
-        let echo_broadcast = message.echo_broadcast.deserialize::<Round3EchoBroadcast<P>>(format)?;
-        let normal_broadcast = message
-            .normal_broadcast
-            .deserialize::<Round3NormalBroadcast<P>>(format)?;
+        message: ProtocolMessage<Id, Self>,
+    ) -> Result<Self::Payload, ReceiveError<Id, Self>> {
+        let echo_broadcast = message.echo_broadcast;
+        let normal_broadcast = message.normal_broadcast;
 
         let aux = (&self.context.epid, from);
-        let r1_payload = self.r1_payloads.safe_get("Round 1 payload", from)?;
+        let r1_payload = self.r1_payloads.get_or_local_error("Round 1 payload", from)?;
 
         if !normal_broadcast.psi_prime.verify(
             ElogPublicInputs {
@@ -1893,23 +2021,26 @@ impl<P: SchemeParams, Id: PartyId> Round<Id> for Round3<P, Id> {
             },
             &aux,
         ) {
-            return Err(ReceiveError::protocol(Error::R3ElogFailed.into()));
+            return Err(ReceiveError::Protocol(R3Error {
+                error: R3ErrorEnum::ElogFailed,
+                phantom: PhantomData,
+            }));
         }
 
-        Ok(Payload::new(Round3Payload {
+        Ok(Round3Payload {
             delta: echo_broadcast.delta,
             cap_delta: normal_broadcast.cap_delta,
             cap_s: normal_broadcast.cap_s,
-        }))
+        })
     }
 
     fn finalize(
-        self: Box<Self>,
-        _rng: &mut dyn CryptoRngCore,
-        payloads: BTreeMap<Id, Payload>,
-        _artifacts: BTreeMap<Id, Artifact>,
+        self,
+        _rng: &mut impl CryptoRngCore,
+        payloads: BTreeMap<Id, Self::Payload>,
+        _artifacts: BTreeMap<Id, Self::Artifact>,
     ) -> Result<FinalizeOutcome<Id, Self::Protocol>, LocalError> {
-        let mut payloads = payloads.downcast_all::<Round3Payload<P>>()?;
+        let mut payloads = payloads;
         let my_payload = Round3Payload {
             delta: self.r3_echo_broadcast.delta,
             cap_delta: self.r3_normal_broadcast.cap_delta,
@@ -1941,7 +2072,7 @@ impl<P: SchemeParams, Id: PartyId> Round<Id> for Round3<P, Id> {
                 cap_fs: self.cap_fs,
             };
 
-            return Ok(FinalizeOutcome::AnotherRound(BoxedRound::new_dynamic(next_round)));
+            return Ok(FinalizeOutcome::AnotherRound(BoxedRound::new(next_round)));
         }
 
         if cap_s != cap_x * delta_combined {
@@ -1962,7 +2093,7 @@ impl<P: SchemeParams, Id: PartyId> Round<Id> for Round3<P, Id> {
                 hat_cap_fs: self.hat_cap_fs,
             };
 
-            return Ok(FinalizeOutcome::AnotherRound(BoxedRound::new_dynamic(next_round)));
+            return Ok(FinalizeOutcome::AnotherRound(BoxedRound::new(next_round)));
         }
 
         // Intentionally making delta = 0 would require coordination from all the participants,
@@ -1982,7 +2113,7 @@ impl<P: SchemeParams, Id: PartyId> Round<Id> for Round3<P, Id> {
         let sigma = *(&presigning_data.tilde_k * self.context.scalar_message + &presigning_data.tilde_chi * nonce)
             .expose_secret();
 
-        Ok(FinalizeOutcome::AnotherRound(BoxedRound::new_dynamic(Round4 {
+        Ok(FinalizeOutcome::AnotherRound(BoxedRound::new(Round4 {
             context: self.context,
             presigning_data,
             sigma,
@@ -1991,7 +2122,7 @@ impl<P: SchemeParams, Id: PartyId> Round<Id> for Round3<P, Id> {
 }
 
 #[derive(Debug)]
-struct Round4<P: SchemeParams, Id: PartyId> {
+pub(super) struct Round4<P: SchemeParams, Id: PartyId> {
     context: Context<P, Id>,
     presigning_data: PresigningData<P, Id>,
     sigma: Scalar<P>,
@@ -2003,12 +2134,21 @@ pub(super) struct Round4NormalBroadcast<P: SchemeParams> {
     pub(crate) sigma: Scalar<P>,
 }
 
-struct Round4Payload<P: SchemeParams> {
+pub(super) struct Round4Payload<P: SchemeParams> {
     sigma: Scalar<P>,
 }
 
 impl<P: SchemeParams, Id: PartyId> Round<Id> for Round4<P, Id> {
     type Protocol = InteractiveSigningProtocol<P, Id>;
+
+    type DirectMessage = NoMessage;
+    type NormalBroadcast = Round4NormalBroadcast<P>;
+    type EchoBroadcast = NoMessage;
+
+    type Payload = Round4Payload<P>;
+    type Artifact = NoArtifact;
+
+    type ProtocolError = R4Error<P, Id>;
 
     fn transition_info(&self) -> TransitionInfo {
         TransitionInfo::new_linear_terminating(4).with_siblings([5, 6].into())
@@ -2018,51 +2158,47 @@ impl<P: SchemeParams, Id: PartyId> Round<Id> for Round4<P, Id> {
         CommunicationInfo::regular(&self.context.other_ids)
     }
 
-    fn make_normal_broadcast(
-        &self,
-        _rng: &mut dyn CryptoRngCore,
-        format: &BoxedFormat,
-    ) -> Result<NormalBroadcast, LocalError> {
-        NormalBroadcast::new(format, Round4NormalBroadcast { sigma: self.sigma })
+    fn make_normal_broadcast(&self, _rng: &mut impl CryptoRngCore) -> Result<Self::NormalBroadcast, LocalError> {
+        Ok(Round4NormalBroadcast { sigma: self.sigma })
     }
 
     fn receive_message(
         &self,
-        format: &BoxedFormat,
+
         from: &Id,
-        message: ProtocolMessage,
-    ) -> Result<Payload, ReceiveError<Id, Self::Protocol>> {
-        message.echo_broadcast.assert_is_none()?;
-        message.direct_message.assert_is_none()?;
-        let normal_broadcast = message
-            .normal_broadcast
-            .deserialize::<Round4NormalBroadcast<P>>(format)?;
+        message: ProtocolMessage<Id, Self>,
+    ) -> Result<Self::Payload, ReceiveError<Id, Self>> {
+        let normal_broadcast = message.normal_broadcast;
 
         let nonce = self.presigning_data.cap_gamma_combined.x_coordinate();
         let tilde_cap_delta = self
             .presigning_data
             .tilde_cap_deltas
-            .safe_get("`\\tilde{Delta}` map", from)?;
-        let tilde_cap_s = self.presigning_data.tilde_cap_ss.safe_get("`\\tilde{S}` map", from)?;
+            .get_or_local_error("`\\tilde{Delta}` map", from)?;
+        let tilde_cap_s = self
+            .presigning_data
+            .tilde_cap_ss
+            .get_or_local_error("`\\tilde{S}` map", from)?;
         if self.presigning_data.cap_gamma_combined * normal_broadcast.sigma
             != tilde_cap_delta * self.context.scalar_message + tilde_cap_s * nonce
         {
-            return Err(ReceiveError::protocol(Error::R4InvalidSignatureShare.into()));
+            return Err(ReceiveError::Protocol(R4Error {
+                error: R4ErrorEnum::InvalidSignatureShare,
+                phantom: PhantomData,
+            }));
         }
 
-        Ok(Payload::new(Round4Payload {
+        Ok(Round4Payload {
             sigma: normal_broadcast.sigma,
-        }))
+        })
     }
 
     fn finalize(
-        self: Box<Self>,
-        _rng: &mut dyn CryptoRngCore,
-        payloads: BTreeMap<Id, Payload>,
-        _artifacts: BTreeMap<Id, Artifact>,
+        self,
+        _rng: &mut impl CryptoRngCore,
+        payloads: BTreeMap<Id, Self::Payload>,
+        _artifacts: BTreeMap<Id, Self::Artifact>,
     ) -> Result<FinalizeOutcome<Id, Self::Protocol>, LocalError> {
-        let payloads = payloads.downcast_all::<Round4Payload<P>>()?;
-
         let assembled_sigma = payloads.values().map(|payload| payload.sigma).sum::<Scalar<P>>() + self.sigma;
 
         let signature = RecoverableSignature::from_scalars(
@@ -2076,7 +2212,7 @@ impl<P: SchemeParams, Id: PartyId> Round<Id> for Round4<P, Id> {
             return Ok(FinalizeOutcome::Result(signature));
         }
 
-        Err(LocalError::new("Failed!"))
+        Err(LocalError::new("The execution should not have reached this round"))
     }
 }
 
@@ -2103,6 +2239,15 @@ pub(super) struct Round5EchoBroadcast<P: SchemeParams, Id: PartyId> {
 impl<P: SchemeParams, Id: PartyId> Round<Id> for Round5<P, Id> {
     type Protocol = InteractiveSigningProtocol<P, Id>;
 
+    type DirectMessage = NoMessage;
+    type NormalBroadcast = NoMessage;
+    type EchoBroadcast = Round5EchoBroadcast<P, Id>;
+
+    type Payload = ();
+    type Artifact = NoArtifact;
+
+    type ProtocolError = R5Error<P, Id>;
+
     fn transition_info(&self) -> TransitionInfo {
         TransitionInfo {
             id: 5.into(),
@@ -2117,11 +2262,7 @@ impl<P: SchemeParams, Id: PartyId> Round<Id> for Round5<P, Id> {
         CommunicationInfo::regular(&self.context.other_ids)
     }
 
-    fn make_echo_broadcast(
-        &self,
-        rng: &mut dyn CryptoRngCore,
-        format: &BoxedFormat,
-    ) -> Result<EchoBroadcast, LocalError> {
+    fn make_echo_broadcast(&self, rng: &mut impl CryptoRngCore) -> Result<Self::EchoBroadcast, LocalError> {
         let my_id = self.context.my_id.clone();
         let aux = (&self.context.epid, &my_id);
         let pk = self.context.aux_info.secret_aux.paillier_sk.public_key();
@@ -2131,15 +2272,15 @@ impl<P: SchemeParams, Id: PartyId> Round<Id> for Round5<P, Id> {
 
         let cap_d = sum_non_empty_ref(
             ids.iter()
-                .map(|id| self.cap_ds.safe_get("`D` map", &(my_id.clone(), id.clone()))),
+                .map(|id| self.cap_ds.get_or_local_error("`D` map", &(my_id.clone(), id.clone()))),
             LocalError::new("There must be at least two parties"),
         )? + sum_non_empty_ref(
             ids.iter()
-                .map(|id| self.cap_fs.safe_get("`F` map", &(id.clone(), my_id.clone()))),
+                .map(|id| self.cap_fs.get_or_local_error("`F` map", &(id.clone(), my_id.clone()))),
             LocalError::new("There must be at least two parties"),
         )?;
 
-        let cap_k = self.cap_ks.safe_get("`K` map", &self.context.my_id)?;
+        let cap_k = self.cap_ks.get_or_local_error("`K` map", &self.context.my_id)?;
 
         let gamma = secret_signed_from_scalar::<P>(&self.context.gamma);
         let full_ciphertext = cap_k * &gamma + &cap_d;
@@ -2159,7 +2300,7 @@ impl<P: SchemeParams, Id: PartyId> Round<Id> for Round5<P, Id> {
             .ok_or_else(|| LocalError::new("`delta` is not in the expected range"))?;
 
         // This is equal to what we would get from reducing `delta_signed` to Scalar.
-        let delta = self.deltas.safe_get("`delta` map", &self.context.my_id)?;
+        let delta = self.deltas.get_or_local_error("`delta` map", &self.context.my_id)?;
 
         let psi_star = DecProof::new(
             rng,
@@ -2188,17 +2329,21 @@ impl<P: SchemeParams, Id: PartyId> Round<Id> for Round5<P, Id> {
                 rng,
                 AffGStarSecretInputs {
                     x: &gamma,
-                    y: self.betas.safe_get("`beta` map", id)?,
-                    rho: self.ss.safe_get("`s` map", id)?,
-                    mu: self.rs.safe_get("`r` map", id)?,
+                    y: self.betas.get_or_local_error("`beta` map", id)?,
+                    rho: self.ss.get_or_local_error("`s` map", id)?,
+                    mu: self.rs.get_or_local_error("`r` map", id)?,
                 },
                 AffGStarPublicInputs {
                     pk0: &self.context.public_aux(id)?.paillier_pk,
                     pk1: pk,
-                    cap_c: self.cap_ks.safe_get("`K` map", id)?,
-                    cap_d: self.cap_ds.safe_get("`D` map", &(id.clone(), my_id.clone()))?,
-                    cap_y: self.cap_fs.safe_get("`F` map", &(id.clone(), my_id.clone()))?,
-                    cap_x: self.cap_gammas.safe_get("`Gamma` map", &my_id)?,
+                    cap_c: self.cap_ks.get_or_local_error("`K` map", id)?,
+                    cap_d: self
+                        .cap_ds
+                        .get_or_local_error("`D` map", &(id.clone(), my_id.clone()))?,
+                    cap_y: self
+                        .cap_fs
+                        .get_or_local_error("`F` map", &(id.clone(), my_id.clone()))?,
+                    cap_x: self.cap_gammas.get_or_local_error("`Gamma` map", &my_id)?,
                 },
                 &aux,
             );
@@ -2206,20 +2351,16 @@ impl<P: SchemeParams, Id: PartyId> Round<Id> for Round5<P, Id> {
             psis.insert(id.clone(), psi);
         }
 
-        EchoBroadcast::new(format, Round5EchoBroadcast::<P, Id> { psi_star, psis })
+        Ok(Round5EchoBroadcast::<P, Id> { psi_star, psis })
     }
 
     fn receive_message(
         &self,
-        format: &BoxedFormat,
+
         from: &Id,
-        message: ProtocolMessage,
-    ) -> Result<Payload, ReceiveError<Id, Self::Protocol>> {
-        message.normal_broadcast.assert_is_none()?;
-        message.direct_message.assert_is_none()?;
-        let echo_broadcast = message
-            .echo_broadcast
-            .deserialize::<Round5EchoBroadcast<P, Id>>(format)?;
+        message: ProtocolMessage<Id, Self>,
+    ) -> Result<Self::Payload, ReceiveError<Id, Self>> {
+        let echo_broadcast = message.echo_broadcast;
 
         let my_id = self.context.my_id.clone();
         let aux = (&self.context.epid, from);
@@ -2231,33 +2372,39 @@ impl<P: SchemeParams, Id: PartyId> Round<Id> for Round5<P, Id> {
 
         let cap_d = sum_non_empty_ref(
             ids.iter()
-                .map(|id| self.cap_ds.safe_get("`D` map", &(from.clone(), id.clone()))),
+                .map(|id| self.cap_ds.get_or_local_error("`D` map", &(from.clone(), id.clone()))),
             LocalError::new("There must be at least two parties"),
         )? + sum_non_empty_ref(
             ids.iter()
-                .map(|id| self.cap_fs.safe_get("`F` map", &(id.clone(), from.clone()))),
+                .map(|id| self.cap_fs.get_or_local_error("`F` map", &(id.clone(), from.clone()))),
             LocalError::new("There must be at least two parties"),
         )?;
 
         if !echo_broadcast.psi_star.verify(
             DecPublicInputs {
                 pk0: sender_pk,
-                cap_k: self.cap_ks.safe_get("`K` map", from)?,
-                cap_x: self.cap_gammas.safe_get("`Gamma` map", from)?,
+                cap_k: self.cap_ks.get_or_local_error("`K` map", from)?,
+                cap_x: self.cap_gammas.get_or_local_error("`Gamma` map", from)?,
                 cap_d: &cap_d,
-                cap_s: &self.deltas.safe_get("`delta` map", from)?.mul_by_generator(),
+                cap_s: &self.deltas.get_or_local_error("`delta` map", from)?.mul_by_generator(),
                 cap_g: &Point::generator(),
                 num_parties: self.context.all_ids.len(),
             },
             sender_rp,
             &aux,
         ) {
-            return Err(ReceiveError::protocol(Error::R5DecFailed.into()));
+            return Err(ReceiveError::Protocol(R5Error {
+                error: R5ErrorEnum::DecFailed,
+                phantom: PhantomData,
+            }));
         }
 
         let expected_ids = self.context.all_ids.clone().without(from);
         if echo_broadcast.psis.keys().cloned().collect::<BTreeSet<_>>() != expected_ids {
-            return Err(ReceiveError::protocol(Error::R5WrongIdsPsi.into()));
+            return Err(ReceiveError::Protocol(R5Error {
+                error: R5ErrorEnum::WrongIdsPsi,
+                phantom: PhantomData,
+            }));
         }
 
         for (id, psi) in echo_broadcast.psis.iter() {
@@ -2270,27 +2417,28 @@ impl<P: SchemeParams, Id: PartyId> Round<Id> for Round5<P, Id> {
                 AffGStarPublicInputs {
                     pk0: pk,
                     pk1: sender_pk,
-                    cap_c: self.cap_ks.safe_get("`K` map", id)?,
-                    cap_d: self.cap_ds.safe_get("`D` map", &(id.clone(), from.clone()))?,
-                    cap_y: self.cap_fs.safe_get("`F` map", &(id.clone(), from.clone()))?,
-                    cap_x: self.cap_gammas.safe_get("`Gamma` map", from)?,
+                    cap_c: self.cap_ks.get_or_local_error("`K` map", id)?,
+                    cap_d: self.cap_ds.get_or_local_error("`D` map", &(id.clone(), from.clone()))?,
+                    cap_y: self.cap_fs.get_or_local_error("`F` map", &(id.clone(), from.clone()))?,
+                    cap_x: self.cap_gammas.get_or_local_error("`Gamma` map", from)?,
                 },
                 &aux,
             ) {
-                return Err(ReceiveError::protocol(
-                    Error::R5AffGStarFailed { failed_for: id.clone() }.into(),
-                ));
+                return Err(ReceiveError::Protocol(R5Error {
+                    error: R5ErrorEnum::AffGStarFailed { failed_for: id.clone() },
+                    phantom: PhantomData,
+                }));
             }
         }
 
-        Ok(Payload::empty())
+        Ok(())
     }
 
     fn finalize(
-        self: Box<Self>,
-        _rng: &mut dyn CryptoRngCore,
-        _payloads: BTreeMap<Id, Payload>,
-        _artifacts: BTreeMap<Id, Artifact>,
+        self,
+        _rng: &mut impl CryptoRngCore,
+        _payloads: BTreeMap<Id, Self::Payload>,
+        _artifacts: BTreeMap<Id, Self::Artifact>,
     ) -> Result<FinalizeOutcome<Id, Self::Protocol>, LocalError> {
         Err(LocalError::new(
             "One of the messages should have been missing or invalid",
@@ -2321,6 +2469,15 @@ pub(super) struct Round6EchoBroadcast<P: SchemeParams, Id: PartyId> {
 impl<P: SchemeParams, Id: PartyId> Round<Id> for Round6<P, Id> {
     type Protocol = InteractiveSigningProtocol<P, Id>;
 
+    type DirectMessage = NoMessage;
+    type NormalBroadcast = NoMessage;
+    type EchoBroadcast = Round6EchoBroadcast<P, Id>;
+
+    type Payload = ();
+    type Artifact = NoArtifact;
+
+    type ProtocolError = R6Error<P, Id>;
+
     fn transition_info(&self) -> TransitionInfo {
         TransitionInfo {
             id: 6.into(),
@@ -2335,11 +2492,7 @@ impl<P: SchemeParams, Id: PartyId> Round<Id> for Round6<P, Id> {
         CommunicationInfo::regular(&self.context.other_ids)
     }
 
-    fn make_echo_broadcast(
-        &self,
-        rng: &mut dyn CryptoRngCore,
-        format: &BoxedFormat,
-    ) -> Result<EchoBroadcast, LocalError> {
+    fn make_echo_broadcast(&self, rng: &mut impl CryptoRngCore) -> Result<Self::EchoBroadcast, LocalError> {
         let my_id = self.context.my_id.clone();
         let aux = (&self.context.epid, &my_id);
         let pk = self.context.aux_info.secret_aux.paillier_sk.public_key();
@@ -2348,16 +2501,20 @@ impl<P: SchemeParams, Id: PartyId> Round<Id> for Round6<P, Id> {
         let ids = self.context.other_ids.clone();
 
         let hat_cap_d = sum_non_empty_ref(
-            ids.iter()
-                .map(|id| self.hat_cap_ds.safe_get("`\\hat{D}` map", &(my_id.clone(), id.clone()))),
+            ids.iter().map(|id| {
+                self.hat_cap_ds
+                    .get_or_local_error("`\\hat{D}` map", &(my_id.clone(), id.clone()))
+            }),
             LocalError::new("There must be at least two parties"),
         )? + sum_non_empty_ref(
-            ids.iter()
-                .map(|id| self.hat_cap_fs.safe_get("`\\hat{F}` map", &(id.clone(), my_id.clone()))),
+            ids.iter().map(|id| {
+                self.hat_cap_fs
+                    .get_or_local_error("`\\hat{F}` map", &(id.clone(), my_id.clone()))
+            }),
             LocalError::new("There must be at least two parties"),
         )?;
 
-        let cap_k = self.cap_ks.safe_get("`K` map", &self.context.my_id)?;
+        let cap_k = self.cap_ks.get_or_local_error("`K` map", &self.context.my_id)?;
 
         let cap_xs = self.context.key_share.public_shares().clone();
 
@@ -2389,9 +2546,9 @@ impl<P: SchemeParams, Id: PartyId> Round<Id> for Round6<P, Id> {
             DecPublicInputs {
                 pk0: pk,
                 cap_k,
-                cap_x: cap_xs.safe_get("`X` map", &self.context.my_id)?,
+                cap_x: cap_xs.get_or_local_error("`X` map", &self.context.my_id)?,
                 cap_d: &hat_cap_d,
-                cap_s: self.cap_ss.safe_get("`S` map", &self.context.my_id)?,
+                cap_s: self.cap_ss.get_or_local_error("`S` map", &self.context.my_id)?,
                 cap_g: &self.cap_gamma_combined,
                 num_parties,
             },
@@ -2405,64 +2562,59 @@ impl<P: SchemeParams, Id: PartyId> Round<Id> for Round6<P, Id> {
                 rng,
                 AffGStarSecretInputs {
                     x: &x,
-                    y: self.hat_betas.safe_get("`\\hat{beta}` map", id)?,
-                    rho: self.hat_ss.safe_get("`\\hat{s}` map", id)?,
-                    mu: self.hat_rs.safe_get("`\\hat{r}` map", id)?,
+                    y: self.hat_betas.get_or_local_error("`\\hat{beta}` map", id)?,
+                    rho: self.hat_ss.get_or_local_error("`\\hat{s}` map", id)?,
+                    mu: self.hat_rs.get_or_local_error("`\\hat{r}` map", id)?,
                 },
                 AffGStarPublicInputs {
                     pk0: &self.context.public_aux(id)?.paillier_pk,
                     pk1: pk,
-                    cap_c: self.cap_ks.safe_get("``K` map", id)?,
+                    cap_c: self.cap_ks.get_or_local_error("``K` map", id)?,
                     cap_d: self
                         .hat_cap_ds
-                        .safe_get("`\\hat{D}` map", &(id.clone(), my_id.clone()))?,
+                        .get_or_local_error("`\\hat{D}` map", &(id.clone(), my_id.clone()))?,
                     cap_y: self
                         .hat_cap_fs
-                        .safe_get("`\\hat{F}` map", &(id.clone(), my_id.clone()))?,
-                    cap_x: cap_xs.safe_get("`X` map", &my_id)?,
+                        .get_or_local_error("`\\hat{F}` map", &(id.clone(), my_id.clone()))?,
+                    cap_x: cap_xs.get_or_local_error("`X` map", &my_id)?,
                 },
                 &aux,
             );
 
-            assert!(hat_psi.verify(
-                AffGStarPublicInputs {
-                    pk0: &self.context.public_aux(id)?.paillier_pk,
-                    pk1: pk,
-                    cap_c: self.cap_ks.safe_get("``K` map", id)?,
-                    cap_d: self
-                        .hat_cap_ds
-                        .safe_get("`\\hat{D}` map", &(id.clone(), my_id.clone()))?,
-                    cap_y: self
-                        .hat_cap_fs
-                        .safe_get("`\\hat{F}` map", &(id.clone(), my_id.clone()))?,
-                    cap_x: cap_xs.safe_get("`X` map", &my_id)?,
-                },
-                &aux,
-            ));
+            assert!(
+                hat_psi.verify(
+                    AffGStarPublicInputs {
+                        pk0: &self.context.public_aux(id)?.paillier_pk,
+                        pk1: pk,
+                        cap_c: self.cap_ks.get_or_local_error("``K` map", id)?,
+                        cap_d: self
+                            .hat_cap_ds
+                            .get_or_local_error("`\\hat{D}` map", &(id.clone(), my_id.clone()))?,
+                        cap_y: self
+                            .hat_cap_fs
+                            .get_or_local_error("`\\hat{F}` map", &(id.clone(), my_id.clone()))?,
+                        cap_x: cap_xs.get_or_local_error("`X` map", &my_id)?,
+                    },
+                    &aux,
+                )
+            );
 
             hat_psis.insert(id.clone(), hat_psi);
         }
 
-        EchoBroadcast::new(
-            format,
-            Round6EchoBroadcast::<P, Id> {
-                hat_psi_star,
-                hat_psis: hat_psis.into(),
-            },
-        )
+        Ok(Round6EchoBroadcast::<P, Id> {
+            hat_psi_star,
+            hat_psis: hat_psis.into(),
+        })
     }
 
     fn receive_message(
         &self,
-        format: &BoxedFormat,
+
         from: &Id,
-        message: ProtocolMessage,
-    ) -> Result<Payload, ReceiveError<Id, Self::Protocol>> {
-        message.normal_broadcast.assert_is_none()?;
-        message.direct_message.assert_is_none()?;
-        let echo_broadcast = message
-            .echo_broadcast
-            .deserialize::<Round6EchoBroadcast<P, Id>>(format)?;
+        message: ProtocolMessage<Id, Self>,
+    ) -> Result<Self::Payload, ReceiveError<Id, Self>> {
+        let echo_broadcast = message.echo_broadcast;
 
         let my_id = self.context.my_id.clone();
         let aux = (&self.context.epid, from);
@@ -2473,12 +2625,16 @@ impl<P: SchemeParams, Id: PartyId> Round<Id> for Round6<P, Id> {
         let ids = self.context.all_ids.clone().without(from);
 
         let hat_cap_d = sum_non_empty_ref(
-            ids.iter()
-                .map(|id| self.hat_cap_ds.safe_get("`\\hat{D}` map", &(from.clone(), id.clone()))),
+            ids.iter().map(|id| {
+                self.hat_cap_ds
+                    .get_or_local_error("`\\hat{D}` map", &(from.clone(), id.clone()))
+            }),
             LocalError::new("There must be at least two parties"),
         )? + sum_non_empty_ref(
-            ids.iter()
-                .map(|id| self.hat_cap_fs.safe_get("`\\hat{F}` map", &(id.clone(), from.clone()))),
+            ids.iter().map(|id| {
+                self.hat_cap_fs
+                    .get_or_local_error("`\\hat{F}` map", &(id.clone(), from.clone()))
+            }),
             LocalError::new("There must be at least two parties"),
         )?;
 
@@ -2487,22 +2643,28 @@ impl<P: SchemeParams, Id: PartyId> Round<Id> for Round6<P, Id> {
         if !echo_broadcast.hat_psi_star.verify(
             DecPublicInputs {
                 pk0: sender_pk,
-                cap_k: self.cap_ks.safe_get("`K` map", from)?,
-                cap_x: cap_xs.safe_get("`X` map", from)?,
+                cap_k: self.cap_ks.get_or_local_error("`K` map", from)?,
+                cap_x: cap_xs.get_or_local_error("`X` map", from)?,
                 cap_d: &hat_cap_d,
-                cap_s: self.cap_ss.safe_get("`S` map", from)?,
+                cap_s: self.cap_ss.get_or_local_error("`S` map", from)?,
                 cap_g: &self.cap_gamma_combined,
                 num_parties: self.context.all_ids.len(),
             },
             sender_rp,
             &aux,
         ) {
-            return Err(ReceiveError::protocol(Error::R6DecFailed.into()));
+            return Err(ReceiveError::Protocol(R6Error {
+                error: R6ErrorEnum::DecFailed,
+                phantom: PhantomData,
+            }));
         }
 
         let expected_ids = self.context.all_ids.clone().without(from);
         if echo_broadcast.hat_psis.keys().cloned().collect::<BTreeSet<_>>() != expected_ids {
-            return Err(ReceiveError::protocol(Error::R6WrongIdsPsi.into()));
+            return Err(ReceiveError::Protocol(R6Error {
+                error: R6ErrorEnum::WrongIdsPsi,
+                phantom: PhantomData,
+            }));
         }
 
         for (id, hat_psi) in echo_broadcast.hat_psis.iter() {
@@ -2515,27 +2677,32 @@ impl<P: SchemeParams, Id: PartyId> Round<Id> for Round6<P, Id> {
                 AffGStarPublicInputs {
                     pk0: pk,
                     pk1: sender_pk,
-                    cap_c: self.cap_ks.safe_get("`K` map", id)?,
-                    cap_d: self.hat_cap_ds.safe_get("`D` map", &(id.clone(), from.clone()))?,
-                    cap_y: self.hat_cap_fs.safe_get("`F` map", &(id.clone(), from.clone()))?,
-                    cap_x: cap_xs.safe_get("`X` map", from)?,
+                    cap_c: self.cap_ks.get_or_local_error("`K` map", id)?,
+                    cap_d: self
+                        .hat_cap_ds
+                        .get_or_local_error("`D` map", &(id.clone(), from.clone()))?,
+                    cap_y: self
+                        .hat_cap_fs
+                        .get_or_local_error("`F` map", &(id.clone(), from.clone()))?,
+                    cap_x: cap_xs.get_or_local_error("`X` map", from)?,
                 },
                 &aux,
             ) {
-                return Err(ReceiveError::protocol(
-                    Error::R6AffGStarFailed { failed_for: id.clone() }.into(),
-                ));
+                return Err(ReceiveError::Protocol(R6Error {
+                    error: R6ErrorEnum::AffGStarFailed { failed_for: id.clone() },
+                    phantom: PhantomData,
+                }));
             }
         }
 
-        Ok(Payload::empty())
+        Ok(())
     }
 
     fn finalize(
-        self: Box<Self>,
-        _rng: &mut dyn CryptoRngCore,
-        _payloads: BTreeMap<Id, Payload>,
-        _artifacts: BTreeMap<Id, Artifact>,
+        self,
+        _rng: &mut impl CryptoRngCore,
+        _payloads: BTreeMap<Id, Self::Payload>,
+        _artifacts: BTreeMap<Id, Self::Artifact>,
     ) -> Result<FinalizeOutcome<Id, Self::Protocol>, LocalError> {
         Err(LocalError::new(
             "One of the messages should have been missing or invalid",
@@ -2547,19 +2714,19 @@ impl<P: SchemeParams, Id: PartyId> Round<Id> for Round6<P, Id> {
 mod tests {
     use alloc::collections::BTreeSet;
 
-    use ecdsa::{signature::hazmat::PrehashVerifier, VerifyingKey};
+    use ecdsa::{VerifyingKey, signature::hazmat::PrehashVerifier};
     use elliptic_curve::FieldBytes;
     use manul::{
-        dev::{run_sync, BinaryFormat, TestSessionParams, TestSigner, TestVerifier},
+        dev::{BinaryFormat, TestSessionParams, TestSigner, TestVerifier, run_sync},
         signature::Keypair,
     };
     use rand_core::{OsRng, RngCore};
 
     use super::InteractiveSigning;
     use crate::{
+        SchemeParams,
         dev::TestParams,
         entities::{AuxInfo, KeyShare},
-        SchemeParams,
     };
     type Curve = <TestParams as SchemeParams>::Curve;
 

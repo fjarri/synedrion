@@ -3,7 +3,7 @@ use crate::{
     params::SchemeParams,
     uint::SecretSigned,
 };
-use criterion::{black_box, BatchSize, Bencher, Criterion};
+use criterion::{BatchSize, Bencher, Criterion, black_box};
 use rand::SeedableRng;
 
 type Params = crate::k256::ProductionParams112;

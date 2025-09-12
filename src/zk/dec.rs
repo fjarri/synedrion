@@ -9,8 +9,8 @@ use crate::{
     curve::Point,
     paillier::{Ciphertext, CiphertextWire, MaskedRandomizer, PaillierParams, PublicKeyPaillier, RPParams, Randomizer},
     params::{
-        scalar_from_signed, scalar_from_wide_signed, secret_scalar_from_signed, secret_scalar_from_wide_signed,
-        SchemeParams,
+        SchemeParams, scalar_from_signed, scalar_from_wide_signed, secret_scalar_from_signed,
+        secret_scalar_from_wide_signed,
     },
     tools::{
         bitvec::BitVec,
@@ -90,7 +90,7 @@ pub(crate) struct DecProofElement<P: SchemeParams> {
 
 impl<P: SchemeParams> DecProof<P> {
     pub fn new(
-        rng: &mut dyn CryptoRngCore,
+        rng: &mut impl CryptoRngCore,
         secret: DecSecretInputs<'_, P>,
         public: DecPublicInputs<'_, P>,
         setup: &RPParams<P::Paillier>,
@@ -271,13 +271,14 @@ impl<P: SchemeParams> DecProof<P> {
 mod tests {
     use manul::{dev::BinaryFormat, session::WireFormat};
     use rand_core::OsRng;
+    use serde::Deserialize;
 
     use super::{DecProof, DecPublicInputs, DecSecretInputs};
     use crate::{
         curve::Scalar,
         dev::TestParams,
         paillier::{Ciphertext, PaillierParams, RPParams, Randomizer, SecretKeyPaillierWire},
-        params::{secret_scalar_from_signed, SchemeParams},
+        params::{SchemeParams, secret_scalar_from_signed},
         uint::SecretSigned,
     };
 
@@ -335,7 +336,7 @@ mod tests {
 
         // Serialization roundtrip
         let serialized = BinaryFormat::serialize(proof).unwrap();
-        let proof = BinaryFormat::deserialize::<DecProof<Params>>(&serialized).unwrap();
+        let proof = DecProof::<Params>::deserialize(BinaryFormat::deserializer(&serialized)).unwrap();
 
         assert!(proof.verify(public, &setup, &aux));
     }

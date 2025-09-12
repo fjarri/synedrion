@@ -1,6 +1,6 @@
 use core::ops::AddAssign;
 
-use crypto_bigint::{NonZero, Random, RandomMod, WrappingAdd, U4096};
+use crypto_bigint::{NonZero, Random, RandomMod, U4096, WrappingAdd};
 use dudect_bencher::{BenchRng, Class, CtRunner};
 use rand::Rng;
 
